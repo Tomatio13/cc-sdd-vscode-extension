@@ -4,23 +4,26 @@
 English | <a href="./README_ja.md">日本語</a>
 </sub></div>
 
-A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, and a task board.
+A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, and resumable Claude Code sessions.
 
-![cc-sdd Specs workbench: spec explorer with status and next actions, task board, and tasks.md](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, with the cc-sdd Runs console streaming a /kiro-impl run](./assets/workbench.png)
 
-<div align="center"><sub>The spec tree shows the current state, the next action (clickable), and task progress — while tasks.md and the task board follow along.</sub></div>
+<div align="center"><sub>Specs, Tasks, and Sessions on the left. The cc-sdd Runs console on the right streams tool calls, markdown output, and progress — permission prompts and <code>AskUserQuestion</code> appear as buttons in the same panel.</sub></div>
 
-This is the **L1 + L2** implementation from [plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md). The extension does not run an LLM itself. It keeps the state machine and hands skill invocations to the agent you already use. The cc-sdd skills themselves come from the cc-sdd installer (`npx cc-sdd@latest --claude-skills`); the extension is the UI layer on top of them.
+This is the **L1 + L2** implementation from [plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md), plus the first slice of L3. Approval and state transitions stay in the extension; skill invocations go to the agent you already use — a terminal, the Claude Code for VS Code panel, or the built-in headless Runs console (Claude Agent SDK). The cc-sdd skills themselves come from the cc-sdd installer (`npx cc-sdd@latest --claude-skills`); the extension is the UI layer on top of them.
+
+Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 ## What it does
 
-![Spec Explorer and Task Board: Steering state, current status, next actions, and phase progress](./assets/spec-explorer.png)
+![Specs, Tasks, and Sessions: steering state, next actions, task progress, and resumable Claude Code sessions](./assets/spec-explorer.png)
 
 - **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate) and roadmap.md order/dependencies when they exist.
 - **Spec Explorer** — lists every `.kiro/specs/<feature>` with phase and approval status, ordered by roadmap when available.
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
-- **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
+- **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 - **Task board** — parses `tasks.md` checkboxes, `(P)` markers, `_Boundary:_`, `_Depends:_`, and `_Requirements:_`. Toggle a task from the tree without leaving the editor.
+- **Sessions** — lists the Claude Code sessions recorded for the current workspace (titles come from the original `/kiro-…` prompt) and resumes them in the Runs console or an interactive terminal. Sessions from other projects are never shown.
 - **Status bar** — shows the active spec and the next action.
 - **Auto refresh** — watches the specs directory and reloads on changes.
 - **Installer** — runs `npx cc-sdd@latest` with the integration you pick.
@@ -71,8 +74,10 @@ Internal commands (`ccSdd.openArtifact`, `ccSdd.openTask`, and so on) are hidden
 | Setting | Default | Description |
 | --- | --- | --- |
 | `ccSdd.kiroDir` | `.kiro` | Directory containing `specs/` and `settings/`. |
-| `ccSdd.agent` | `claude` | `claude`, `codex`, `copilot`, `opencode`, `custom`, or `clipboard`. |
+| `ccSdd.agent` | `claude` | `claude`, `claude-vscode`, `claude-console`, `codex`, `copilot`, `opencode`, `custom`, or `clipboard`. |
 | `ccSdd.customCommand` | empty | Terminal template for `custom`. Placeholders: `${prompt}`, `${skill}`, `${feature}`. |
+| `ccSdd.consolePermissionMode` | `default` | Preselected permission mode for `claude-console` runs (`default` / `acceptEdits` / `bypassPermissions` / `plan`). `default` asks in the Runs console. A picker still asks per run. |
+| `ccSdd.claudePath` | `claude` | Path to the claude CLI used for headless runs. |
 | `ccSdd.installLanguage` | empty | Optional `--lang` value for the installer. |
 | `ccSdd.autoRefresh` | `true` | Watch the specs directory for changes. |
 
@@ -81,13 +86,23 @@ Internal commands (`ccSdd.openArtifact`, `ccSdd.openTask`, and so on) are hidden
 | Agent | What the extension does |
 | --- | --- |
 | `claude` | Opens a terminal and runs `claude "/kiro-… <feature>"`. |
+| `claude-vscode` | Prefills the prompt in the Claude Code for VS Code panel. It follows the extension's preferred location (sidebar or editor tab). Press Enter to run it. |
+| `claude-console` | Runs headless via the Claude Agent SDK and streams progress in the **cc-sdd Runs** console. Permission requests and `AskUserQuestion` prompts appear as buttons inside the console, so requirements/design questions can be answered without leaving VS Code. |
 | `codex` | Opens a terminal and runs `codex "$kiro-… <feature>"`. |
 | `copilot` | Prefills the prompt in Copilot Chat (`workbench.action.chat.open`). |
 | `opencode` | Opens a terminal and runs `opencode run "/kiro-… <feature>"`. |
 | `custom` | Runs the `ccSdd.customCommand` template. |
 | `clipboard` | Copies the prompt. Useful when the agent runs elsewhere. |
 
-If Copilot Chat cannot be opened, the prompt is copied to the clipboard instead.
+If Copilot Chat cannot be opened, the prompt is copied to the clipboard instead. The same fallback applies when the `claude-vscode` panel cannot be reached.
+
+### Sessions
+
+The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so only sessions whose recorded `cwd` matches the current workspace are listed (newest first). Hovering shows the last assistant message to jog your memory; clicking a session opens a **read-only preview** of the full transcript in the Runs console. The same card has a continuation input and a permission-mode selector: **Resume in console** continues the session **in place** (no extra dialogs), and **Terminal** launches `claude --resume`. The context-menu action also offers:
+
+- **Resume in Runs console** — continues the same session headlessly (Claude Agent SDK `resume`), with the usual permission picker. The stored transcript is replayed as a **Session history** block above the live output.
+- **Resume in terminal** — runs `claude --resume <session-id>` interactively.
+- **Open raw transcript** / **Copy session id** — for inspection or scripting.
 
 ## Workspace scope
 

@@ -1,16 +1,18 @@
 # cc-sdd Specs（VS Code 拡張機能）
 
-[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード）を追加します。
+[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード、headless な **Runs** コンソール、Claude Code セッションの再開）を追加します。
 
 <div align="center" style="margin-bottom: 1rem; font-size: 1.1rem;"><sub>
 <a href="./README.md">English</a> | 日本語
 </sub></div>
 
-これは [plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md) の **L1 + L2** 実装です。拡張自身は LLM を実行しません。状態機械だけを保持し、スキルの呼び出しはあなたが使っているエージェントに任せます。cc-sdd のスキル本体は cc-sdd インストーラ（`npx cc-sdd@latest --claude-skills`）が入れます。拡張はその上の UI レイヤーです。
+これは [plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md) の **L1 + L2** 実装に、L3 の最初のスライスを加えたものです。承認と状態遷移は拡張側に保持し、スキルの呼び出しはあなたが使っているエージェント（ターミナル / Claude Code for VS Code パネル / 内蔵の headless Runs コンソール = Claude Agent SDK）に任せます。cc-sdd のスキル本体は cc-sdd インストーラ（`npx cc-sdd@latest --claude-skills`）が入れます。拡張はその上の UI レイヤーです。
 
-![cc-sdd Specs ワークベンチ: 状態と次のアクションが見える spec explorer、タスクボード、tasks.md](./assets/workbench.png)
+設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
-<div align="center"><sub>spec ツリーには現在の状態・次のアクション（クリック可）・タスク進捗が表示され、tasks.md とタスクボードが連動します。</sub></div>
+![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバーと、/kiro-impl を実行中の cc-sdd Runs コンソール](./assets/workbench.png)
+
+<div align="center"><sub>左に Specs / Tasks / Sessions。右の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。</sub></div>
 
 ## フローの対応範囲
 
@@ -27,12 +29,13 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `/kiro-validate-impl` | ✅ `Validate implementation` ノード / `cc-sdd: Run Implementation Validation` |
 | `/kiro-spec-status` | ✅ `cc-sdd: Show Spec Status`（Markdown レポートを開く） |
 | `/kiro-validate-gap` / `validate-design` | ✅ spec 右クリックから実行 |
+| セッション再開 | ✅ **Sessions** ビュー。現在のワークスペースのセッションだけを一覧し、Runs コンソール / ターミナルで resume |
 | `/kiro-spec-batch` | ⚠️ roadmap.md の依存順で Spec 一覧を並べ替え・依存表示までは対応。batch 実行自体はスキル側 |
 | `/kiro-spec-quick` / `review` / `debug` / `verify-completion` | ⚠️ 起動 UI なし。セッション内で完結するワークフローのため（review は plugin の `kiro-reviewer` サブエージェントで補完可） |
 
 ## 何ができるか
 
-![Spec Explorer と Task Board: Steering の状態、現在のステータス、次のアクション、フェーズ進捗](./assets/spec-explorer.png)
+![Specs / Tasks / Sessions: Steering の状態、次のアクション、タスク進捗、再開可能な Claude Code セッション](./assets/spec-explorer.png)
 
 - **Spec Explorer** — `.kiro/specs/<feature>` をフェーズと承認状況込みで一覧。roadmap があれば依存順に並べ替え、`deps:` バッジ付き
 - **Steering / Roadmap ノード** — `.kiro/steering/` の生成状況と roadmap.md への入口。roadmap.md は `## Specs (dependency order)` をパースする
@@ -90,8 +93,10 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | 設定 | 既定値 | 説明 |
 | --- | --- | --- |
 | `ccSdd.kiroDir` | `.kiro` | `specs/` と `settings/` を含むディレクトリ |
-| `ccSdd.agent` | `claude` | `claude` / `codex` / `copilot` / `opencode` / `custom` / `clipboard` |
+| `ccSdd.agent` | `claude` | `claude` / `claude-vscode` / `claude-console` / `codex` / `copilot` / `opencode` / `custom` / `clipboard` |
 | `ccSdd.customCommand` | 空 | `custom` 時のターミナルコマンドテンプレート。`${prompt}`、`${skill}`、`${feature}` が使用可 |
+| `ccSdd.consolePermissionMode` | `default` | `claude-console`(headless 実行)の既定権限モード(`default` / `acceptEdits` / `bypassPermissions` / `plan`)。`default` は Runs コンソール内で確認する。実行ごとに選択画面が出る |
+| `ccSdd.claudePath` | `claude` | headless 実行で使う claude CLI のパス |
 | `ccSdd.installLanguage` | 空 | インストーラに渡す `--lang` 値（例: `ja`） |
 | `ccSdd.autoRefresh` | `true` | specs ディレクトリの変更を監視 |
 
@@ -100,13 +105,22 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | エージェント | 動作 |
 | --- | --- |
 | `claude` | ターミナルで `claude "/kiro-… <feature>"` を実行 |
-| `codex` | ターミナルで `codex "$kiro-… <feature>"` を実行 |
+| `claude-vscode` | Claude Code for VS Code のパネルにプロンプトを補完。拡張側の preferred location（サイドバー or エディタタブ）に追従。Enter で実行 |
+| `claude-console` | Claude Agent SDK 経由で headless 実行し、**cc-sdd Runs** コンソールに進捗をストリーミング表示。権限確認と `AskUserQuestion` はコンソール内のボタンで回答できる(requirements / design の質問も VS Code 内で完結) |
 | `copilot` | Copilot Chat にプロンプトを流し込む |
 | `opencode` | ターミナルで `opencode run "/kiro-… <feature>"` を実行 |
 | `custom` | `ccSdd.customCommand` のテンプレートを実行 |
 | `clipboard` | プロンプトをコピー（エージェントを別画面で使う場合） |
 
 Copilot Chat を開けない場合は、プロンプトをクリップボードにコピーします。
+
+### Sessions
+
+**Sessions** ビューは `~/.claude/projects/<encoded-workspace>/*.jsonl` を読み、記録された `cwd` が現在のワークスペースと一致するセッションだけを新しい順に表示します。ホバーで最後のアシスタント発話を確認でき、**クリックするとトランスクリプト全体の読み取り専用プレビュー**が Runs コンソールに開きます。同じカード内の継続メッセージ入力欄と権限モード選択から **Resume in console** を押すと、**その場で**ライブ実行に切り替わります(追加ダイアログなし)。**Terminal** ボタンは `claude --resume` を起動します。右クリックメニューには以下もあります:
+
+- **Resume in Runs console** — 同じセッションを headless で継続(Claude Agent SDK の `resume`)。権限モードは通常どおり選択。保存済みのトランスクリプトは **Session history** ブロックとして表示され、過去のやり取りがそのまま読めます
+- **Resume in terminal** — `claude --resume <session-id>` を対話ターミナルで起動
+- **Open raw transcript** / **Copy session id** — 調査・スクリプト用
 
 ## ワークスペースのスコープ
 
