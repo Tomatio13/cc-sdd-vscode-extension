@@ -6,6 +6,16 @@ import {
 
 export type { AgentConfig, AgentKind, Invocation } from '../core/invocation';
 
+export interface ConsoleLaunchMeta {
+  skill: string;
+  feature: string;
+}
+
+export interface RunSkillOptions {
+  // Present only when the host wires the Runs console; agent 'claude-console' requires it.
+  consoleLauncher?: (prompt: string, meta: ConsoleLaunchMeta) => Promise<void>;
+}
+
 const openCopilotChat = async (prompt: string): Promise<void> => {
   try {
     await vscode.commands.executeCommand('workbench.action.chat.open', {
@@ -20,16 +30,64 @@ const openCopilotChat = async (prompt: string): Promise<void> => {
   }
 };
 
+// Delivers the prompt to the Claude Code for VS Code panel. The prompt is
+// pre-filled in the composer — not sent — so the user presses Enter to run it.
+const sendToClaudeVscodePanel = async (prompt: string): Promise<void> => {
+  try {
+    await vscode.commands.executeCommand(
+      'claude-vscode.editor.open',
+      undefined, // sessionId: start a new conversation
+      prompt, // initialPrompt
+      undefined, // viewColumn
+      undefined, // new session group
+      undefined, // fullEditor
+      { programmatic: 'honor-preferred-location' },
+    );
+  } catch {
+    await openClaudeVscodeViaUri(prompt);
+  }
+};
+
+const openClaudeVscodeViaUri = async (prompt: string): Promise<void> => {
+  try {
+    await vscode.env.openExternal(
+      vscode.Uri.parse(
+        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`,
+      ),
+    );
+  } catch {
+    await vscode.env.clipboard.writeText(prompt);
+    void vscode.window.showWarningMessage(
+      `Could not reach Claude Code for VS Code. The prompt was copied to the clipboard: ${prompt}`,
+    );
+  }
+};
+
 export const runSkill = async (
   config: AgentConfig,
   workspaceRoot: string,
   feature: string,
   skill: string,
+  options: RunSkillOptions = {},
 ): Promise<void> => {
   const invocation = buildInvocation(config, skill, feature);
 
   if (config.agent === 'copilot') {
     await openCopilotChat(invocation.prompt);
+    return;
+  }
+
+  if (config.agent === 'claude-vscode') {
+    await sendToClaudeVscodePanel(invocation.prompt);
+    return;
+  }
+
+  if (config.agent === 'claude-console') {
+    if (!options.consoleLauncher) {
+      void vscode.window.showWarningMessage('cc-sdd: the Runs console is not available.');
+      return;
+    }
+    await options.consoleLauncher(invocation.prompt, { skill, feature });
     return;
   }
 

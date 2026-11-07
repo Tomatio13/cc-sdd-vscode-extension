@@ -24,6 +24,18 @@ describe('buildInvocation', () => {
     expect(invocation.command).toBe('opencode run "/kiro-impl photo-albums"');
   });
 
+  it('returns only the prompt for the Claude Code VS Code panel', () => {
+    const invocation = buildInvocation(config('claude-vscode'), 'kiro-impl', 'alpha');
+    expect(invocation.prompt).toBe('/kiro-impl alpha');
+    expect(invocation.command).toBeUndefined();
+  });
+
+  it('returns only the prompt for the headless Runs console', () => {
+    const invocation = buildInvocation(config('claude-console'), 'kiro-impl', 'alpha');
+    expect(invocation.prompt).toBe('/kiro-impl alpha');
+    expect(invocation.command).toBeUndefined();
+  });
+
   it('only returns the prompt for Copilot and clipboard', () => {
     expect(buildInvocation(config('copilot'), 'kiro-impl', 'alpha').command).toBeUndefined();
     expect(buildInvocation(config('clipboard'), 'kiro-impl', 'alpha').command).toBeUndefined();

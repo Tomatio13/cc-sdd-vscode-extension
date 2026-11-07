@@ -28,6 +28,7 @@ import {
 } from './core/phases';
 import type { ParsedTask } from './core/tasks';
 import { validateArtifact } from './core/validation';
+import { claudeProjectDir, formatWhen, listSessions, readTranscriptSegments, type SessionRecord } from './core/sessions';
 import {
   runInstall,
   runSkill,
@@ -37,6 +38,9 @@ import {
 import { SpecTreeProvider } from './ui/specTree';
 import { StatusBar } from './ui/statusBar';
 import { TaskTreeProvider } from './ui/taskTree';
+import { SessionsTreeProvider } from './ui/sessionsTree';
+import { RunsConsole, type PhaseActions } from './ui/runsConsole';
+import { resolveClaudeExecutable } from './run/claudeRunner';
 
 interface PhaseTarget {
   record: SpecRecord;
@@ -114,6 +118,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const statusBar = new StatusBar();
   let activeSpecId = context.workspaceState.get<string>('ccSdd.activeSpec');
   let watcher: vscode.FileSystemWatcher | undefined;
+  let sessionsWatcher: vscode.FileSystemWatcher | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
 
   const workspaceRoot = (): string | undefined =>
@@ -169,6 +174,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const taskProvider = new TaskTreeProvider((record) => readArtifact(record, 'tasks'));
 
+  const sessionsProvider = new SessionsTreeProvider(async () => {
+    const root = workspaceRoot();
+    return root ? listSessions(root) : [];
+  });
+
   const showError = (error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`cc-sdd: ${message}`);
@@ -201,6 +211,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     specProvider.refresh();
     taskProvider.setActive(active);
     statusBar.update(active);
+    sessionsProvider.refresh();
 
     if (activeSpecId) {
       await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
@@ -234,6 +245,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     watcher.onDidChange(scheduleRefresh);
     watcher.onDidDelete(scheduleRefresh);
     context.subscriptions.push(watcher);
+
+    sessionsWatcher?.dispose();
+    sessionsWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(claudeProjectDir(root)), '*.jsonl'),
+    );
+    sessionsWatcher.onDidCreate(scheduleRefresh);
+    sessionsWatcher.onDidChange(scheduleRefresh);
+    sessionsWatcher.onDidDelete(scheduleRefresh);
+    context.subscriptions.push(sessionsWatcher);
   };
 
   const selectSpec = async (arg?: unknown): Promise<void> => {
@@ -256,7 +276,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     await selectSpec(record);
-    await runSkill(agentConfig(), root, record.id, PHASE_META[phase].skill);
+    await runSkill(agentConfig(), root, record.id, PHASE_META[phase].skill, runSkillOptions);
   };
 
   const openArtifact = async (target: PhaseTarget): Promise<void> => {
@@ -371,7 +391,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     await selectSpec(record);
-    await runSkill(agentConfig(), root, record.id, IMPLEMENTATION_SKILL);
+    await runSkill(agentConfig(), root, record.id, IMPLEMENTATION_SKILL, runSkillOptions);
   };
 
   const runValidateImpl = async (record: SpecRecord): Promise<void> => {
@@ -382,7 +402,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     await selectSpec(record);
-    await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL);
+    await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL, runSkillOptions);
   };
 
   const runWithSkill = async (skill: string, feature = ''): Promise<void> => {
@@ -392,7 +412,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    await runSkill(agentConfig(), root, feature, skill);
+    await runSkill(agentConfig(), root, feature, skill, runSkillOptions);
   };
 
   const runDiscovery = async (): Promise<void> => {
@@ -441,7 +461,280 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    await runSkill(agentConfig(), root, description.trim(), NEW_SPEC_SKILL);
+    await runSkill(agentConfig(), root, description.trim(), NEW_SPEC_SKILL, runSkillOptions);
+  };
+
+  const PHASE_BY_SKILL = new Map<string, PhaseKey>(
+    PHASES.map((phase) => [PHASE_META[phase].skill, phase]),
+  );
+
+  const askPermissionMode = async (): Promise<string | undefined> => {
+    const fallback = configuration().get<string>('consolePermissionMode', 'default');
+    const picked = await vscode.window.showQuickPick(
+      (
+        [
+          'default',
+          'acceptEdits',
+          'bypassPermissions',
+          'plan',
+        ] as const
+      ).map((mode) => ({
+        label: mode,
+        description:
+          mode === 'default'
+            ? 'Ask me in the Runs console before gated tools (recommended)'
+            : mode === 'acceptEdits'
+              ? 'Auto-accept file edits; other tools are denied in headless mode'
+              : mode === 'bypassPermissions'
+                ? 'Allow every tool incl. Bash; fully unattended'
+                : 'Read-only planning',
+        picked: mode === fallback,
+      })),
+      {
+        placeHolder:
+          'Permission mode for this headless run (default: ccSdd.consolePermissionMode)',
+      },
+    );
+    return picked?.label;
+  };
+
+  const launchConsoleRun = async (
+    prompt: string,
+    meta: { skill: string; feature: string },
+  ): Promise<void> => {
+    const permissionMode = await askPermissionMode();
+    if (!permissionMode) {
+      return;
+    }
+    runsConsole.startRun({ skill: meta.skill, feature: meta.feature, prompt, permissionMode });
+  };
+
+  // Headless runs launch skills with the per-run permission pick.
+  const runSkillOptions = { consoleLauncher: launchConsoleRun };
+
+  const runsConsole = new RunsConsole({
+    getWorkspaceRoot: () => workspaceRoot(),
+    getBinary: () =>
+      resolveClaudeExecutable(configuration().get<string>('claudePath', 'claude')),
+    getPhaseActions: async (skill: string, feature: string): Promise<PhaseActions> => {
+      const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
+      if (!record) {
+        return {};
+      }
+      const actions: PhaseActions = {};
+
+      if (skill === IMPLEMENTATION_SKILL) {
+        actions.artifactPath = record.artifacts.tasks;
+        if (record.spec?.ready_for_implementation === true) {
+          actions.runImpl = true;
+        }
+        return actions;
+      }
+
+      const phase = PHASE_BY_SKILL.get(skill);
+      if (!phase || !record.spec) {
+        return actions;
+      }
+      actions.artifactPath = record.artifacts[phase];
+      const approval = record.spec.approvals[phase];
+      if (approval?.generated === true && approval?.approved !== true) {
+        actions.approve = { phase, label: PHASE_META[phase].label };
+      }
+      if (approval?.approved === true) {
+        const index = PHASES.indexOf(phase);
+        const next = PHASES.slice(index + 1).find(
+          (candidate) => record.spec?.approvals[candidate]?.approved !== true,
+        );
+        if (next) {
+          actions.runNextPhase = { phase: next, label: PHASE_META[next].label };
+        } else if (record.spec.ready_for_implementation === true) {
+          actions.runImpl = true;
+        }
+      }
+      return actions;
+    },
+    approvePhase: async (feature: string, phase: string) => {
+      if (!isPhaseKey(phase)) {
+        return;
+      }
+      const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
+      if (record) {
+        await approvePhase({ record, phase });
+      }
+    },
+    runPhase: async (feature: string, phase: string) => {
+      if (!isPhaseKey(phase)) {
+        return;
+      }
+      const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
+      if (record) {
+        await runPhase(record, phase);
+      }
+    },
+    runImplementation: async (feature: string) => {
+      const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
+      if (record) {
+        await runImplementation(record);
+      }
+    },
+    openPath: openFile,
+    rerun: async (skill: string, feature: string) => {
+      const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
+      if (!record) {
+        return;
+      }
+      const phase = PHASE_BY_SKILL.get(skill);
+      if (phase) {
+        await runPhase(record, phase);
+        return;
+      }
+      if (skill === IMPLEMENTATION_SKILL) {
+        await runImplementation(record);
+        return;
+      }
+      await runWithSkill(skill, record.id);
+    },
+    resumeTerminal: async (sessionId: string) => {
+      resumeInTerminal(sessionId);
+    },
+  });
+
+  const sessionFromArg = (value: unknown): SessionRecord | undefined => {
+    if (typeof value !== 'object' || value === null) {
+      return undefined;
+    }
+    const candidate = value as Partial<SessionRecord>;
+    return typeof candidate.id === 'string' && typeof candidate.filePath === 'string'
+      ? (candidate as SessionRecord)
+      : undefined;
+  };
+
+  const quoteShell = (value: string): string => `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
+
+  const resumeInTerminal = (sessionId: string, title?: string): void => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+    const binary = configuration().get<string>('claudePath', 'claude');
+    const terminal = vscode.window.createTerminal({
+      name: `cc-sdd: resume ${title ?? sessionId.slice(0, 8)}`,
+      cwd: root,
+    });
+    terminal.show();
+    terminal.sendText(`${quoteShell(binary)} --resume ${quoteShell(sessionId)}`, true);
+  };
+
+  const resumeInConsole = async (
+    sessionId: string,
+    filePath: string,
+    skill?: string,
+    feature?: string,
+  ): Promise<void> => {
+    if (!workspaceRoot()) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+    const instruction = await vscode.window.showInputBox({
+      prompt: 'Message to continue this session (leave empty to just continue)',
+      placeHolder: 'e.g. Continue with the remaining tasks',
+    });
+    if (instruction === undefined) {
+      return;
+    }
+    const permissionMode = await askPermissionMode();
+    if (!permissionMode) {
+      return;
+    }
+    runsConsole.startRun({
+      skill: skill ?? 'resume',
+      feature: feature ?? sessionId.slice(0, 8),
+      prompt: instruction.trim() || 'Continue from where you left off.',
+      permissionMode,
+      resume: sessionId,
+      history: readTranscriptSegments(filePath),
+    });
+  };
+
+  const previewSession = async (arg?: unknown): Promise<void> => {
+    const session = sessionFromArg(arg);
+    if (!session) {
+      return;
+    }
+    if (!workspaceRoot()) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+    runsConsole.previewSession({
+      title: session.title,
+      skill: session.skill,
+      feature: session.feature,
+      sessionId: session.id,
+      filePath: session.filePath,
+      history: readTranscriptSegments(session.filePath),
+      defaultPermissionMode: configuration().get<string>('consolePermissionMode', 'default'),
+    });
+  };
+
+  const resumeSession = async (arg?: unknown): Promise<void> => {
+    const session = sessionFromArg(arg);
+    if (!session) {
+      return;
+    }
+    if (!workspaceRoot()) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const action = await vscode.window.showQuickPick(
+      [
+        {
+          label: '$(preview) Preview transcript',
+          description: 'Read the session before deciding to resume',
+          value: 'preview',
+        },
+        {
+          label: '$(play) Resume in Runs console',
+          description: 'Headless continuation with a new instruction',
+          value: 'console',
+        },
+        {
+          label: '$(terminal) Resume in terminal',
+          description: `claude --resume ${session.id.slice(0, 8)}…`,
+          value: 'terminal',
+        },
+        {
+          label: '$(go-to-file) Open raw transcript',
+          description: session.filePath,
+          value: 'open',
+        },
+        { label: '$(copy) Copy session id', value: 'copy' },
+      ],
+      { placeHolder: `${session.title} · ${formatWhen(session.updatedAt)}` },
+    );
+    if (!action) {
+      return;
+    }
+
+    if (action.value === 'preview') {
+      await previewSession(session);
+      return;
+    }
+    if (action.value === 'open') {
+      await openFile(session.filePath);
+      return;
+    }
+    if (action.value === 'copy') {
+      await vscode.env.clipboard.writeText(session.id);
+      void vscode.window.showInformationMessage('cc-sdd: session id copied.');
+      return;
+    }
+    if (action.value === 'terminal') {
+      resumeInTerminal(session.id, session.title);
+      return;
+    }
+    await resumeInConsole(session.id, session.filePath, session.skill, session.feature);
   };
 
   const install = async (): Promise<void> => {
@@ -558,6 +851,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('ccSdd.specs', specProvider),
     vscode.window.registerTreeDataProvider('ccSdd.tasks', taskProvider),
+    vscode.window.registerTreeDataProvider('ccSdd.sessions', sessionsProvider),
     statusBar,
     register('ccSdd.refresh', refresh),
     register('ccSdd.pickSpec', pickSpec),
@@ -647,6 +941,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     register('ccSdd.install', install),
+    register('ccSdd.runs', async () => {
+      runsConsole.show();
+    }),
+    register('ccSdd.resumeSession', async (arg) => {
+      await resumeSession(arg);
+    }),
+    register('ccSdd.previewSession', async (arg) => {
+      await previewSession(arg);
+    }),
+    register('ccSdd.refreshSessions', async () => {
+      sessionsProvider.refresh();
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('ccSdd')) {
         setupWatcher();
@@ -680,6 +986,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           clearTimeout(refreshTimer);
         }
         watcher?.dispose();
+        sessionsWatcher?.dispose();
+        runsConsole.dispose();
       },
     },
   );

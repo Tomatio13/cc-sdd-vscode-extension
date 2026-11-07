@@ -2,7 +2,7 @@
   "name": "cc-sdd-vscode",
   "displayName": "cc-sdd Specs",
   "description": "Spec-Driven Development workbench for cc-sdd: spec explorer, approval gates, and task board for .kiro/specs.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "gotalab",
   "license": "MIT",
   "private": true,
@@ -48,6 +48,10 @@
         {
           "id": "ccSdd.tasks",
           "name": "Tasks"
+        },
+        {
+          "id": "ccSdd.sessions",
+          "name": "Sessions"
         }
       ]
     },
@@ -59,6 +63,10 @@
       {
         "view": "ccSdd.tasks",
         "contents": "Select a spec in the Specs view to see its tasks."
+      },
+      {
+        "view": "ccSdd.sessions",
+        "contents": "No sessions for this project yet.\nRuns started with agent `claude-console` are recorded here and can be resumed."
       }
     ],
     "commands": [
@@ -157,6 +165,26 @@
         "command": "ccSdd.toggleTask",
         "title": "Toggle Task",
         "icon": "$(check)"
+      },
+      {
+        "command": "ccSdd.runs",
+        "title": "cc-sdd: Show Runs Console",
+        "icon": "$(console)"
+      },
+      {
+        "command": "ccSdd.resumeSession",
+        "title": "cc-sdd: Resume Session",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "ccSdd.previewSession",
+        "title": "cc-sdd: Preview Session Transcript",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "ccSdd.refreshSessions",
+        "title": "cc-sdd: Refresh Sessions",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -180,6 +208,11 @@
           "command": "ccSdd.refresh",
           "when": "view == ccSdd.specs || view == ccSdd.tasks",
           "group": "navigation@3"
+        },
+        {
+          "command": "ccSdd.refreshSessions",
+          "when": "view == ccSdd.sessions",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -242,6 +275,11 @@
           "command": "ccSdd.toggleTask",
           "when": "view == ccSdd.tasks && viewItem =~ /^task/",
           "group": "inline@1"
+        },
+        {
+          "command": "ccSdd.resumeSession",
+          "when": "view == ccSdd.sessions && viewItem == session",
+          "group": "inline@1"
         }
       ],
       "commandPalette": [
@@ -280,6 +318,14 @@
         {
           "command": "ccSdd.openPath",
           "when": "false"
+        },
+        {
+          "command": "ccSdd.resumeSession",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.previewSession",
+          "when": "false"
         }
       ]
     },
@@ -301,6 +347,8 @@
           "type": "string",
           "enum": [
             "claude",
+            "claude-vscode",
+            "claude-console",
             "codex",
             "copilot",
             "opencode",
@@ -309,6 +357,8 @@
           ],
           "enumDescriptions": [
             "Run the skill in a Claude Code terminal.",
+            "Send the skill prompt to the Claude Code for VS Code panel. The prompt is pre-filled in the composer; press Enter to run it.",
+            "Run headless with claude -p and stream progress in the cc-sdd Runs console. Auto-executes; the permission mode is picked per run.",
             "Run the skill in a Codex terminal.",
             "Prefill the skill prompt in Copilot Chat.",
             "Run the skill with `opencode run`.",
@@ -328,6 +378,22 @@
           "default": "",
           "description": "Optional --lang value passed to `npx cc-sdd@latest` (for example: ja, zh-TW). Leave empty to use the installer default."
         },
+        "ccSdd.consolePermissionMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "bypassPermissions",
+            "plan"
+          ],
+          "default": "default",
+          "description": "Preselected permission mode for headless runs (ccSdd.agent = claude-console). 'default' asks in the Runs console before gated tools. A picker still asks per run."
+        },
+        "ccSdd.claudePath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path to the claude CLI binary used for headless runs."
+        },
         "ccSdd.autoRefresh": {
           "type": "boolean",
           "default": true,
@@ -337,16 +403,18 @@
     }
   },
   "scripts": {
-    "build": "tsc -p .",
-    "watch": "tsc -w -p .",
+    "build": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --log-level=warning \"--define:import.meta.url=__filename\"",
+    "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --watch \"--define:import.meta.url=__filename\"",
     "check": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:watch": "vitest -w",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
     "@types/node": "^24.10.0",
     "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

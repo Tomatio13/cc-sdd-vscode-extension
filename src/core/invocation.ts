@@ -1,5 +1,7 @@
 export type AgentKind =
   | 'claude'
+  | 'claude-vscode'
+  | 'claude-console'
   | 'codex'
   | 'copilot'
   | 'opencode'
@@ -30,6 +32,9 @@ export const buildInvocation = (
   switch (config.agent) {
     case 'claude':
       return { prompt, command: `claude ${quote(prompt)}` };
+    case 'claude-vscode':
+      // agentLauncher delivers the prompt to the Claude Code for VS Code panel.
+      return { prompt };
     case 'codex':
       return { prompt, command: `codex ${quote(prompt)}` };
     case 'opencode':
