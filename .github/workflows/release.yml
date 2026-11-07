@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # タグ (例: v0.6.0) と package.json の version の一致を検証してから CI を回す
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(jq -r .version package.json)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}. Bump the version (or re-tag ${GITHUB_REF_NAME} as v${PKG_VERSION}) and push again."
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Verify artifact
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VSIX="cc-sdd-vscode-${VERSION}.vsix"
+          test -f "$VSIX"
+          echo "VSIX=$VSIX" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$VSIX" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+          || gh release upload "$GITHUB_REF_NAME" "$VSIX" --clobber
