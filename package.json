@@ -1,0 +1,353 @@
+{
+  "name": "cc-sdd-vscode",
+  "displayName": "cc-sdd Specs",
+  "description": "Spec-Driven Development workbench for cc-sdd: spec explorer, approval gates, and task board for .kiro/specs.",
+  "version": "0.6.0",
+  "publisher": "gotalab",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tomatio13/cc-sdd-vscode-extension.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "cc-sdd",
+    "sdd",
+    "spec-driven",
+    "kiro",
+    "agent"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/.kiro/specs/*/spec.json",
+    "onView:ccSdd.specs",
+    "onCommand:ccSdd.refresh"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ccSdd",
+          "title": "cc-sdd",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ccSdd": [
+        {
+          "id": "ccSdd.specs",
+          "name": "Specs"
+        },
+        {
+          "id": "ccSdd.tasks",
+          "name": "Tasks"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "ccSdd.specs",
+        "contents": "No cc-sdd specs found.\n[Create a spec](command:ccSdd.newSpec)\n[Install cc-sdd](command:ccSdd.install)\n[Refresh](command:ccSdd.refresh)"
+      },
+      {
+        "view": "ccSdd.tasks",
+        "contents": "Select a spec in the Specs view to see its tasks."
+      }
+    ],
+    "commands": [
+      {
+        "command": "ccSdd.refresh",
+        "title": "cc-sdd: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ccSdd.newSpec",
+        "title": "cc-sdd: New Spec",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ccSdd.runDiscovery",
+        "title": "cc-sdd: Run Discovery",
+        "icon": "$(compass)"
+      },
+      {
+        "command": "ccSdd.runSteering",
+        "title": "cc-sdd: Run Steering"
+      },
+      {
+        "command": "ccSdd.runValidateGap",
+        "title": "cc-sdd: Validate against Codebase (Gap)"
+      },
+      {
+        "command": "ccSdd.runValidateDesign",
+        "title": "cc-sdd: Validate Design"
+      },
+      {
+        "command": "ccSdd.openPath",
+        "title": "Open Path"
+      },
+      {
+        "command": "ccSdd.install",
+        "title": "cc-sdd: Install Skills",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "ccSdd.pickSpec",
+        "title": "cc-sdd: Select Active Spec",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "ccSdd.showStatus",
+        "title": "cc-sdd: Show Spec Status",
+        "icon": "$(info)"
+      },
+      {
+        "command": "ccSdd.selectSpec",
+        "title": "Select Spec",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ccSdd.openSpecJson",
+        "title": "Open spec.json",
+        "icon": "$(json)"
+      },
+      {
+        "command": "ccSdd.openArtifact",
+        "title": "Open Artifact",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ccSdd.runPhase",
+        "title": "Run Phase",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ccSdd.approvePhase",
+        "title": "Approve Phase",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ccSdd.revokePhase",
+        "title": "Revoke Approval",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "ccSdd.runImpl",
+        "title": "Run Implementation",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "ccSdd.runValidateImpl",
+        "title": "cc-sdd: Run Implementation Validation",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "ccSdd.openTask",
+        "title": "Open Task",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ccSdd.toggleTask",
+        "title": "Toggle Task",
+        "icon": "$(check)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ccSdd.runDiscovery",
+          "when": "view == ccSdd.specs",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ccSdd.newSpec",
+          "when": "view == ccSdd.specs",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.install",
+          "when": "view == ccSdd.specs",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccSdd.refresh",
+          "when": "view == ccSdd.specs || view == ccSdd.tasks",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ccSdd.selectSpec",
+          "when": "view == ccSdd.specs && viewItem =~ /^spec/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.runValidateGap",
+          "when": "view == ccSdd.specs && viewItem =~ /^spec/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccSdd.runValidateDesign",
+          "when": "view == ccSdd.specs && viewItem =~ /^spec/",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ccSdd.openSpecJson",
+          "when": "view == ccSdd.specs && viewItem =~ /^spec/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ccSdd.runImpl",
+          "when": "view == ccSdd.specs && viewItem == spec-ready",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.openArtifact",
+          "when": "view == ccSdd.specs && viewItem =~ /^phase-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ccSdd.runPhase",
+          "when": "view == ccSdd.specs && viewItem =~ /^phase-(missing|draft|generated)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.approvePhase",
+          "when": "view == ccSdd.specs && viewItem =~ /^phase-(draft|generated)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "ccSdd.revokePhase",
+          "when": "view == ccSdd.specs && viewItem == phase-approved",
+          "group": "inline@3"
+        },
+        {
+          "command": "ccSdd.openTask",
+          "when": "view == ccSdd.specs && viewItem == task-todo",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.openTask",
+          "when": "view == ccSdd.tasks && viewItem =~ /^task/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.toggleTask",
+          "when": "view == ccSdd.tasks && viewItem =~ /^task/",
+          "group": "inline@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ccSdd.selectSpec",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openSpecJson",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openArtifact",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.runPhase",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.approvePhase",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.revokePhase",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openTask",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.toggleTask",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openPath",
+          "when": "false"
+        }
+      ]
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": "**/.kiro/specs/*/spec.json",
+        "url": "./schemas/spec.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "cc-sdd",
+      "properties": {
+        "ccSdd.kiroDir": {
+          "type": "string",
+          "default": ".kiro",
+          "description": "Directory that contains specs/ and settings/, relative to the workspace root."
+        },
+        "ccSdd.agent": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "copilot",
+            "opencode",
+            "custom",
+            "clipboard"
+          ],
+          "enumDescriptions": [
+            "Run the skill in a Claude Code terminal.",
+            "Run the skill in a Codex terminal.",
+            "Prefill the skill prompt in Copilot Chat.",
+            "Run the skill with `opencode run`.",
+            "Use ccSdd.customCommand as the terminal command template.",
+            "Copy the skill prompt to the clipboard."
+          ],
+          "default": "claude",
+          "description": "How the extension hands a skill invocation to an agent."
+        },
+        "ccSdd.customCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Terminal command template used when ccSdd.agent is \"custom\". Placeholders: ${prompt}, ${skill}, ${feature}."
+        },
+        "ccSdd.installLanguage": {
+          "type": "string",
+          "default": "",
+          "description": "Optional --lang value passed to `npx cc-sdd@latest` (for example: ja, zh-TW). Leave empty to use the installer default."
+        },
+        "ccSdd.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the Specs and Tasks views when files under the specs directory change."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "check": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "test:watch": "vitest -w",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

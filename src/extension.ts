@@ -1,0 +1,693 @@
+import * as vscode from 'vscode';
+import * as path from 'node:path';
+import {
+  listSpecs,
+  readArtifact,
+  readRoadmap,
+  readSteering,
+  resolveKiroDir,
+  toggleTaskCheckbox,
+  updateApproval,
+  type SpecRecord,
+} from './core/repository';
+import {
+  PHASES,
+  nextAction,
+  phaseStatus,
+  type PhaseKey,
+} from './core/spec';
+import {
+  DISCOVERY_SKILL,
+  IMPLEMENTATION_SKILL,
+  NEW_SPEC_SKILL,
+  PHASE_META,
+  STEERING_SKILL,
+  VALIDATE_DESIGN_SKILL,
+  VALIDATE_GAP_SKILL,
+  VALIDATE_IMPL_SKILL,
+} from './core/phases';
+import type { ParsedTask } from './core/tasks';
+import { validateArtifact } from './core/validation';
+import {
+  runInstall,
+  runSkill,
+  type AgentConfig,
+  type AgentKind,
+} from './launch/agentLauncher';
+import { SpecTreeProvider } from './ui/specTree';
+import { StatusBar } from './ui/statusBar';
+import { TaskTreeProvider } from './ui/taskTree';
+
+interface PhaseTarget {
+  record: SpecRecord;
+  phase: PhaseKey;
+}
+
+interface TaskTarget {
+  record: SpecRecord;
+  task: ParsedTask;
+}
+
+interface InstallOption extends vscode.QuickPickItem {
+  args: string;
+}
+
+const isSpecRecord = (value: unknown): value is SpecRecord => {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const record = value as Partial<SpecRecord>;
+  return typeof record.id === 'string' && typeof record.dir === 'string';
+};
+
+const isPhaseKey = (value: unknown): value is PhaseKey =>
+  typeof value === 'string' && (PHASES as readonly string[]).includes(value);
+
+/**
+ * Tree context-menu commands receive the tree element, not the TreeItem.
+ * Spec elements wrap the record as { kind: 'spec', record }, while item
+ * commands pass the record directly. Accept both shapes.
+ */
+const recordFromArg = (value: unknown): SpecRecord | undefined => {
+  if (isSpecRecord(value)) {
+    return value;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const candidate = value as { record?: unknown };
+    if (isSpecRecord(candidate.record)) {
+      return candidate.record;
+    }
+  }
+
+  return undefined;
+};
+
+const phaseTarget = (value: unknown): PhaseTarget | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const candidate = value as { record?: unknown; phase?: unknown };
+  if (!isSpecRecord(candidate.record) || !isPhaseKey(candidate.phase)) {
+    return undefined;
+  }
+
+  return { record: candidate.record, phase: candidate.phase };
+};
+
+const taskTarget = (value: unknown): TaskTarget | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const candidate = value as { record?: unknown; task?: unknown };
+  if (!isSpecRecord(candidate.record) || typeof candidate.task !== 'object' || candidate.task === null) {
+    return undefined;
+  }
+
+  return { record: candidate.record, task: candidate.task as ParsedTask };
+};
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const statusBar = new StatusBar();
+  let activeSpecId = context.workspaceState.get<string>('ccSdd.activeSpec');
+  let watcher: vscode.FileSystemWatcher | undefined;
+  let refreshTimer: NodeJS.Timeout | undefined;
+
+  const workspaceRoot = (): string | undefined =>
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  const configuration = (): vscode.WorkspaceConfiguration =>
+    vscode.workspace.getConfiguration('ccSdd');
+
+  const kiroDir = (): string => configuration().get<string>('kiroDir', '.kiro');
+
+  const agentConfig = (): AgentConfig => ({
+    agent: configuration().get<AgentKind>('agent', 'claude'),
+    customCommand: configuration().get<string>('customCommand', ''),
+  });
+
+  const loadSpecs = async (): Promise<SpecRecord[]> => {
+    const root = workspaceRoot();
+    if (!root) {
+      return [];
+    }
+    return listSpecs(root, kiroDir());
+  };
+
+  const specProvider = new SpecTreeProvider(
+    loadSpecs,
+    (record) => readArtifact(record, 'tasks'),
+    async () => {
+      const root = workspaceRoot();
+      if (!root) {
+        return {
+          steering: { generated: false, missing: ['product.md', 'tech.md', 'structure.md'], files: [] },
+          roadmap: undefined,
+        };
+      }
+      const [steering, roadmap] = await Promise.all([
+        readSteering(root, kiroDir()),
+        readRoadmap(root, kiroDir()),
+      ]);
+      return { steering, roadmap };
+    },
+  );
+
+  const getActiveSpec = async (): Promise<SpecRecord | undefined> => {
+    const records = await loadSpecs();
+    if (activeSpecId && !records.some((record) => record.id === activeSpecId)) {
+      activeSpecId = records[0]?.id;
+    }
+    if (!activeSpecId) {
+      activeSpecId = records[0]?.id;
+    }
+    return records.find((record) => record.id === activeSpecId);
+  };
+
+  const taskProvider = new TaskTreeProvider((record) => readArtifact(record, 'tasks'));
+
+  const showError = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    void vscode.window.showErrorMessage(`cc-sdd: ${message}`);
+  };
+
+  const register = (
+    command: string,
+    handler: (...args: unknown[]) => Promise<void>,
+  ): vscode.Disposable =>
+    vscode.commands.registerCommand(command, (...args: unknown[]) => {
+      void handler(...args).catch(showError);
+    });
+
+  const openFile = async (filePath: string): Promise<void> => {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+    await vscode.window.showTextDocument(document, { preview: false });
+  };
+
+  const openFileAtLine = async (filePath: string, line: number): Promise<void> => {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const position = new vscode.Position(Math.max(0, line), 0);
+    const selection = new vscode.Selection(position, position);
+    editor.selection = selection;
+    editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+  };
+
+  const refresh = async (): Promise<void> => {
+    const active = await getActiveSpec();
+    specProvider.refresh();
+    taskProvider.setActive(active);
+    statusBar.update(active);
+
+    if (activeSpecId) {
+      await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
+    }
+  };
+
+  const scheduleRefresh = (): void => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => {
+      void refresh().catch(showError);
+    }, 150);
+  };
+
+  const setupWatcher = (): void => {
+    watcher?.dispose();
+    watcher = undefined;
+
+    const root = workspaceRoot();
+    const enabled = configuration().get<boolean>('autoRefresh', true);
+    if (!root || !enabled) {
+      return;
+    }
+
+    const watchRoot = vscode.Uri.file(resolveKiroDir(root, kiroDir()));
+    watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watchRoot, '**/*'),
+    );
+    watcher.onDidCreate(scheduleRefresh);
+    watcher.onDidChange(scheduleRefresh);
+    watcher.onDidDelete(scheduleRefresh);
+    context.subscriptions.push(watcher);
+  };
+
+  const selectSpec = async (arg?: unknown): Promise<void> => {
+    const record = recordFromArg(arg);
+    if (!record) {
+      return;
+    }
+
+    activeSpecId = record.id;
+    await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
+    taskProvider.setActive(record);
+    statusBar.update(record);
+  };
+
+  const runPhase = async (record: SpecRecord, phase: PhaseKey): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    await selectSpec(record);
+    await runSkill(agentConfig(), root, record.id, PHASE_META[phase].skill);
+  };
+
+  const openArtifact = async (target: PhaseTarget): Promise<void> => {
+    const meta = PHASE_META[target.phase];
+    if (!target.record.exists[target.phase]) {
+      const action = await vscode.window.showInformationMessage(
+        `${meta.file} does not exist yet.`,
+        'Run phase',
+      );
+      if (action === 'Run phase') {
+        await runPhase(target.record, target.phase);
+      }
+      return;
+    }
+
+    await openFile(target.record.artifacts[target.phase]);
+  };
+
+  const approvePhase = async (target: PhaseTarget): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const meta = PHASE_META[target.phase];
+    const content = await readArtifact(target.record, target.phase);
+    const result = validateArtifact(
+      target.phase,
+      content,
+      target.record.spec?.language,
+    );
+
+    if (result.errors.length > 0) {
+      const action = await vscode.window.showErrorMessage(
+        `${meta.label} cannot be approved:\n- ${result.errors.join('\n- ')}`,
+        { modal: false },
+        'Open file',
+      );
+      if (action === 'Open file' && content !== undefined) {
+        await openFile(target.record.artifacts[target.phase]);
+      }
+      return;
+    }
+
+    if (result.warnings.length > 0) {
+      const choice = await vscode.window.showWarningMessage(
+        `${meta.label} has warnings:\n- ${result.warnings.join('\n- ')}`,
+        { modal: true },
+        'Approve anyway',
+      );
+      if (choice !== 'Approve anyway') {
+        return;
+      }
+    }
+
+    const updated = await updateApproval(
+      root,
+      kiroDir(),
+      target.record.id,
+      target.phase,
+      true,
+    );
+    await refresh();
+
+    if (updated.ready_for_implementation) {
+      void vscode.window.showInformationMessage(
+        `All phases approved. Ready for /${IMPLEMENTATION_SKILL} ${target.record.id}.`,
+      );
+    } else {
+      void vscode.window.showInformationMessage(`${meta.label} approved.`);
+    }
+  };
+
+  const revokePhase = async (target: PhaseTarget): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const meta = PHASE_META[target.phase];
+    const choice = await vscode.window.showWarningMessage(
+      `Revoke approval for ${meta.label}?`,
+      { modal: true },
+      'Revoke',
+    );
+    if (choice !== 'Revoke') {
+      return;
+    }
+
+    await updateApproval(root, kiroDir(), target.record.id, target.phase, false);
+    await refresh();
+  };
+
+  const runImplementation = async (record: SpecRecord): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    if (record.spec?.ready_for_implementation !== true) {
+      const choice = await vscode.window.showWarningMessage(
+        'Not all phases are approved. Run implementation anyway?',
+        { modal: true },
+        'Run anyway',
+      );
+      if (choice !== 'Run anyway') {
+        return;
+      }
+    }
+
+    await selectSpec(record);
+    await runSkill(agentConfig(), root, record.id, IMPLEMENTATION_SKILL);
+  };
+
+  const runValidateImpl = async (record: SpecRecord): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    await selectSpec(record);
+    await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL);
+  };
+
+  const runWithSkill = async (skill: string, feature = ''): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    await runSkill(agentConfig(), root, feature, skill);
+  };
+
+  const runDiscovery = async (): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const description = await vscode.window.showInputBox({
+      prompt: 'Run Discovery: describe the work, or leave empty to resume from existing brief/roadmap',
+      placeHolder: 'Photo albums with upload, tagging, and sharing',
+    });
+
+    await runWithSkill(DISCOVERY_SKILL, description?.trim() ?? '');
+  };
+
+  const runValidateOnActive = async (
+    getSkill: () => string,
+    label: string,
+  ): Promise<void> => {
+    const records = await loadSpecs();
+    const record = records.find((candidate) => candidate.id === activeSpecId) ?? records[0];
+    if (!record) {
+      void vscode.window.showInformationMessage(`cc-sdd: ${label} needs a spec.`);
+      return;
+    }
+
+    await selectSpec(record);
+    await runWithSkill(getSkill(), record.id);
+  };
+
+
+  const newSpec = async (): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const description = await vscode.window.showInputBox({
+      prompt: 'Describe the feature or initiative',
+      placeHolder: 'Photo albums with upload, tagging, and sharing',
+    });
+    if (!description?.trim()) {
+      return;
+    }
+
+    await runSkill(agentConfig(), root, description.trim(), NEW_SPEC_SKILL);
+  };
+
+  const install = async (): Promise<void> => {
+    const root = workspaceRoot();
+    if (!root) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const options: InstallOption[] = [
+      { label: 'Claude Code Skills', description: '--claude-skills', args: '--claude-skills' },
+      { label: 'Codex Skills', description: '--codex-skills', args: '--codex-skills' },
+      { label: 'GitHub Copilot Skills', description: '--copilot-skills', args: '--copilot-skills' },
+      { label: 'Cursor Skills', description: '--cursor-skills', args: '--cursor-skills' },
+      { label: 'OpenCode Skills', description: '--opencode-skills', args: '--opencode-skills' },
+      { label: 'Gemini CLI Skills', description: '--gemini-skills', args: '--gemini-skills' },
+      { label: 'Custom arguments', description: 'Enter your own flags', args: '' },
+    ];
+
+    const picked = await vscode.window.showQuickPick(options, {
+      placeHolder: 'Select the cc-sdd integration to install',
+    });
+    if (!picked) {
+      return;
+    }
+
+    let args = picked.args;
+    if (!args) {
+      const input = await vscode.window.showInputBox({
+        prompt: 'Arguments for npx cc-sdd@latest',
+        value: '--claude-skills',
+      });
+      if (input === undefined) {
+        return;
+      }
+      args = input.trim();
+    }
+
+    if (!args) {
+      return;
+    }
+
+    const language = configuration().get<string>('installLanguage', '').trim();
+    runInstall(root, args, language);
+  };
+
+  const pickSpec = async (): Promise<void> => {
+    const records = await loadSpecs();
+    if (records.length === 0) {
+      void vscode.window.showInformationMessage('cc-sdd: no specs found.');
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      records.map((record) => ({
+        label: record.spec?.feature_name?.trim() || record.id,
+        description: record.spec?.phase ?? 'spec.json missing',
+        detail: record.dir,
+        record,
+      })),
+      { placeHolder: 'Select the active spec' },
+    );
+    if (!picked) {
+      return;
+    }
+
+    await selectSpec(picked.record);
+  };
+
+  const showStatus = async (arg?: unknown): Promise<void> => {
+    const records = await loadSpecs();
+    const record =
+      recordFromArg(arg) ??
+      records.find((candidate) => candidate.id === activeSpecId) ??
+      records[0];
+
+    if (!record) {
+      void vscode.window.showInformationMessage('cc-sdd: no specs found.');
+      return;
+    }
+
+    const label = record.spec?.feature_name?.trim() || record.id;
+    const action = record.spec ? nextAction(record.spec).label : 'spec.json missing';
+    const lines = [
+      `# ${label}`,
+      '',
+      `- Path: \`${record.dir}\``,
+      `- Phase: \`${record.spec?.phase ?? 'unknown'}\``,
+      `- Ready for implementation: ${record.spec?.ready_for_implementation ? 'yes' : 'no'}`,
+      `- Next: ${action}`,
+      '',
+      '| Phase | File | Status | Generated | Approved |',
+      '| --- | --- | --- | --- | --- |',
+      ...PHASES.map((phase) => {
+        const status = phaseStatus(record.spec, phase, record.exists[phase]);
+        const approval = record.spec?.approvals[phase];
+        return `| ${PHASE_META[phase].label} | \`${PHASE_META[phase].file}\` | ${status} | ${
+          approval?.generated ? 'yes' : 'no'
+        } | ${approval?.approved ? 'yes' : 'no'} |`;
+      }),
+    ];
+
+    if (record.specError) {
+      lines.push('', `> ${record.specError}`);
+    }
+
+    const document = await vscode.workspace.openTextDocument({
+      content: `${lines.join('\n')}\n`,
+      language: 'markdown',
+    });
+    await vscode.window.showTextDocument(document, { preview: true });
+  };
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('ccSdd.specs', specProvider),
+    vscode.window.registerTreeDataProvider('ccSdd.tasks', taskProvider),
+    statusBar,
+    register('ccSdd.refresh', refresh),
+    register('ccSdd.pickSpec', pickSpec),
+    register('ccSdd.showStatus', showStatus),
+    register('ccSdd.selectSpec', selectSpec),
+    register('ccSdd.openSpecJson', async (arg) => {
+      const record = recordFromArg(arg);
+      if (record) {
+        await openFile(record.specJsonPath);
+      }
+    }),
+    register('ccSdd.openArtifact', async (arg) => {
+      const target = phaseTarget(arg);
+      if (target) {
+        await openArtifact(target);
+      }
+    }),
+    register('ccSdd.runPhase', async (arg) => {
+      const target = phaseTarget(arg);
+      if (target) {
+        await runPhase(target.record, target.phase);
+      }
+    }),
+    register('ccSdd.approvePhase', async (arg) => {
+      const target = phaseTarget(arg);
+      if (target) {
+        await approvePhase(target);
+      }
+    }),
+    register('ccSdd.revokePhase', async (arg) => {
+      const target = phaseTarget(arg);
+      if (target) {
+        await revokePhase(target);
+      }
+    }),
+    register('ccSdd.runImpl', async (arg) => {
+      const records = await loadSpecs();
+      const record =
+        recordFromArg(arg) ??
+        records.find((candidate) => candidate.id === activeSpecId) ??
+        records[0];
+      if (record) {
+        await runImplementation(record);
+      } else {
+        void vscode.window.showInformationMessage('cc-sdd: no specs found.');
+      }
+    }),
+    register('ccSdd.runValidateImpl', async (arg) => {
+      const records = await loadSpecs();
+      const record =
+        recordFromArg(arg) ??
+        records.find((candidate) => candidate.id === activeSpecId) ??
+        records[0];
+      if (record) {
+        await runValidateImpl(record);
+      } else {
+        void vscode.window.showInformationMessage('cc-sdd: no specs found.');
+      }
+    }),
+    register('ccSdd.openTask', async (arg) => {
+      const target = taskTarget(arg);
+      if (target) {
+        await openFileAtLine(target.record.artifacts.tasks, target.task.line);
+      }
+    }),
+    register('ccSdd.toggleTask', async (arg) => {
+      const target = taskTarget(arg);
+      if (target) {
+        await toggleTaskCheckbox(target.record, target.task.line);
+        await refresh();
+      }
+    }),
+    register('ccSdd.newSpec', newSpec),
+    register('ccSdd.runDiscovery', runDiscovery),
+    register('ccSdd.runSteering', async () => {
+      await runWithSkill(STEERING_SKILL);
+    }),
+    register('ccSdd.runValidateGap', async () => {
+      await runValidateOnActive(() => VALIDATE_GAP_SKILL, 'gap analysis');
+    }),
+    register('ccSdd.runValidateDesign', async () => {
+      await runValidateOnActive(() => VALIDATE_DESIGN_SKILL, 'design validation');
+    }),
+    register('ccSdd.openPath', async (arg?: unknown) => {
+      if (typeof arg === 'string') {
+        await openFile(arg);
+      }
+    }),
+    register('ccSdd.install', install),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('ccSdd')) {
+        setupWatcher();
+        void refresh().catch(showError);
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      setupWatcher();
+      void refresh().catch(showError);
+    }),
+    vscode.window.onDidChangeWindowState((state) => {
+      // External processes (agents, terminals) can change spec files while the
+      // window is unfocused; some platforms deliver those events unreliably.
+      if (state.focused) {
+        void refresh().catch(showError);
+      }
+    }),
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      const root = workspaceRoot();
+      if (!root) {
+        return;
+      }
+      const specsRoot = resolveKiroDir(root, kiroDir());
+      if (document.uri.fsPath.startsWith(specsRoot + path.sep)) {
+        void refresh().catch(showError);
+      }
+    }),
+    {
+      dispose: () => {
+        if (refreshTimer) {
+          clearTimeout(refreshTimer);
+        }
+        watcher?.dispose();
+      },
+    },
+  );
+
+  setupWatcher();
+  await refresh().catch(showError);
+}
+
+export function deactivate(): void {
+  // Disposables registered in activate() are cleaned up by VS Code.
+}
