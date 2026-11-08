@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { SpecRecord } from '../core/repository';
 import { buildTaskTree, parseTasks, type ParsedTask } from '../core/tasks';
+import { taskStateIcon, taskStateLabel } from './treeState';
 
 export type TaskTreeNode =
   | { kind: 'task'; record: SpecRecord; task: ParsedTask }
@@ -15,16 +16,17 @@ const taskItem = (record: SpecRecord, task: ParsedTask): vscode.TreeItem => {
   const item = new vscode.TreeItem(`${task.id}. ${task.title}`, collapsible);
   item.id = `task:${record.id}:${task.line}:${task.id}`;
   item.contextValue = task.checked ? 'task-done' : 'task-todo';
-  item.iconPath = new vscode.ThemeIcon(task.checked ? 'pass-filled' : 'circle-outline');
+  item.iconPath = new vscode.ThemeIcon(taskStateIcon(task.checked));
 
-  const badges: string[] = [];
+  const description: string[] = [];
   if (task.parallel) {
-    badges.push('(P)');
+    description.push('parallel');
   }
-  if (task.boundary) {
-    badges.push(`boundary: ${task.boundary}`);
+  if (task.requirements.length > 0) {
+    const [first, ...rest] = task.requirements;
+    description.push(`req ${first}${rest.length > 0 ? ` +${rest.length}` : ''}`);
   }
-  item.description = badges.join(' · ');
+  item.description = description.join(' · ');
 
   item.command = {
     command: 'ccSdd.openTask',
@@ -36,6 +38,9 @@ const taskItem = (record: SpecRecord, task: ParsedTask): vscode.TreeItem => {
   tooltip.supportThemeIcons = true;
   tooltip.appendMarkdown(`**${task.id}. ${task.title}**\n\n`);
   tooltip.appendMarkdown(`Line: \`${task.line + 1}\`\n\n`);
+  if (task.parallel) {
+    tooltip.appendMarkdown('Parallel task\n\n');
+  }
   if (task.boundary) {
     tooltip.appendMarkdown(`Boundary: \`${task.boundary}\`\n\n`);
   }
@@ -45,7 +50,9 @@ const taskItem = (record: SpecRecord, task: ParsedTask): vscode.TreeItem => {
   if (task.requirements.length > 0) {
     tooltip.appendMarkdown(`Requirements: \`${task.requirements.join(', ')}\`\n\n`);
   }
-  tooltip.appendMarkdown(task.checked ? '$(pass-filled) Done' : '$(circle-outline) Not started');
+  tooltip.appendMarkdown(
+    `${task.checked ? '$(pass-filled)' : '$(circle-outline)'} ${taskStateLabel(task.checked)}`,
+  );
   item.tooltip = tooltip;
 
   return item;
@@ -76,8 +83,8 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeNode> {
       return [
         {
           kind: 'message',
-          label: 'No active spec',
-          description: 'Select a spec in the Specs view',
+          label: 'No spec selected',
+          description: 'Choose one in Specs',
         },
       ];
     }
@@ -88,7 +95,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeNode> {
         return [
           {
             kind: 'message',
-            label: 'tasks.md not found',
+            label: 'Tasks not generated',
             description: 'Run /kiro-spec-tasks',
           },
         ];
@@ -99,7 +106,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeNode> {
         return [
           {
             kind: 'message',
-            label: 'No tasks yet',
+            label: 'No tasks',
             description: 'Run /kiro-spec-tasks',
           },
         ];

@@ -1,5 +1,12 @@
 src/**
 test/**
+docs/**
+.github/**
+plan.md
+# GitHub READMEs use screenshots; the VSIX uses README.marketplace.md instead.
+assets/**
+README.md
+README_ja.md
 **/*.ts
 **/*.map
 tsconfig.json

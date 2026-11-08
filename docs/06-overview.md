@@ -124,4 +124,4 @@ run event → RunsConsole.updateAll (80ms 合流) → onDidChange
   ワーカー状態を表示できる
 - pending への回答や Cancel は現状 run タブで行う。Overview から直接操作する場合は
   `runsConsole` のメッセージハンドラを共有する必要がある
-- README 用のキャプチャは `assets/workbench.png`（全体）と `assets/overview.png`（Overview）
+- Marketplace 用 README は画像なし。GitHub 用のスクリーンショットは VSIX に含めない

@@ -58,10 +58,9 @@ esbuild src/extension.ts --bundle --platform=node --format=cjs \
 
 ## パッケージ
 
-- `.vscodeignore` で `src/` `test/` `*.ts` `node_modules/` などを除外
-- 成果物: `cc-sdd-vscode-<version>.vsix`(README / assets / schemas / media / out / docs を含む)
-  - 0.8.1 時点: 22 files / 約 1.64 MB
-- README 用キャプチャは `assets/workbench.png`(全体)と `assets/overview.png`(Overview のクロップ)
+- `.vscodeignore` で `src/` `test/` `docs/` `assets/` `README.md` `README_ja.md` `*.ts` `node_modules/` などを除外
+- 成果物: `cc-sdd-vscode-<version>.vsix`(実行に必要な `out/` `media/` `schemas/` `package.json` と `README.marketplace.md` のみ)
+- Marketplace 用 README は `README.marketplace.md`(画像なし)。GitHub 用 `README.md` / `README_ja.md` は画像あり、VSIX には含めない
 - `package.json` の `private: true` は Marketplace 公開を前提にしないため(GitHub Releases 配布)
 
 ## CI / リリース
@@ -131,12 +130,11 @@ git push origin v0.9.0   # これで Release まで自動
 3. `ui/overviewPanel.ts` の `renderKpi()` / `renderCard()` / `renderSpec()` に表示を追加
 4. クリック操作が必要なら Webview メッセージ(`OverviewMessage`)と `OverviewPanelOptions` を追加
 
-### README のキャプチャを更新する
+### README を更新する
 
-1. VS Code で Specs / Runs / Overview を並べた状態を撮る
-2. 全体を `assets/workbench.png`(1800px 幅程度)にリサイズ
-3. Overview パネルだけを `assets/overview.png`(1000px 幅程度)にクロップ
-4. `npm run package` で VSIX にも反映(README / assets は VSIX に含まれる)
+- GitHub 用: `README.md` / `README_ja.md`。キャプチャは `assets/` に置き、VSIX には含めない
+- Marketplace 用: `README.marketplace.md`。画像なしの短い説明を保つ
+- `npm run package` で VSIX を作り直す
 
 ## デバッグ
 

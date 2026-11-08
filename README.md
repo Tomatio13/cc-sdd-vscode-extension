@@ -8,13 +8,15 @@ A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It re
 
 ![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview board on the right](./assets/workbench.png)
 
-<div align="center"><sub>Specs, Tasks, and Sessions on the left. The Runs console in the middle streams tool calls, markdown output, and progress — permission prompts and <code>AskUserQuestion</code> appear as buttons in the same panel. The Overview board on the right summarizes waiting workers, live runs, today's spend, and spec progress.</sub></div>
+The workbench is built around three sidebar trees and two panels:
+
+- **Specs, Tasks, Sessions** — the sidebar shows phase and approval state, the next action, task progress, steering context, and resumable Claude Code sessions.
+- **Runs** — streams tool calls, markdown output, and progress in one panel. Permission prompts and `AskUserQuestion` appear as buttons there.
+- **Overview** — a PM-facing board with waiting workers, live runs, today's spend, and spec progress.
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 ## What it does
-
-![Specs, Tasks, and Sessions: steering state, next actions, task progress, and resumable Claude Code sessions](./assets/spec-explorer.png)
 
 - **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate) and roadmap.md order/dependencies when they exist.
 - **Spec Explorer** — lists every `.kiro/specs/<feature>` with phase and approval status, ordered by roadmap when available.
@@ -106,8 +108,6 @@ The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so
 - **Open raw transcript** / **Copy session id** — for inspection or scripting.
 
 ### Overview board
-
-![cc-sdd Overview board: KPI strip, Needs you / Running / Done / Failed columns, and the spec portfolio](./assets/overview.png)
 
 `cc-sdd: Open Overview` (or the dashboard icon in the view title) opens a PM-facing board:
 

@@ -6,11 +6,15 @@
 <a href="./README.md">English</a> | 日本語
 </sub></div>
 
-設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
-
 ![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバー、中央の cc-sdd Runs コンソール、右の cc-sdd Overview ボード](./assets/workbench.png)
 
-<div align="center"><sub>左に Specs / Tasks / Sessions。中央の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。右の Overview ボードは対応待ち・実行中・当日コスト・spec 進捗をまとめて表示します。</sub></div>
+このワークベンチは、3つのサイドバーツリーと2つのパネルで構成されます。
+
+- **Specs / Tasks / Sessions** — フェーズと承認状況、次のアクション、タスク進捗、Steering の文脈、再開可能な Claude Code セッションを表示します。
+- **Runs** — ツール呼び出し・Markdown 出力・進捗を1つのパネルにストリーミング表示。権限確認と `AskUserQuestion` も同じパネルで回答できます。
+- **Overview** — 対応待ち・実行中・当日コスト・spec 進捗をまとめた PM 向けボードです。
+
+設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
 ## フローの対応範囲
 
@@ -33,8 +37,6 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `/kiro-spec-quick` / `review` / `debug` / `verify-completion` | ⚠️ 起動 UI なし。セッション内で完結するワークフローのため、拡張からは起動しない |
 
 ## 何ができるか
-
-![Specs / Tasks / Sessions: Steering の状態、次のアクション、タスク進捗、再開可能な Claude Code セッション](./assets/spec-explorer.png)
 
 - **Spec Explorer** — `.kiro/specs/<feature>` をフェーズと承認状況込みで一覧。roadmap があれば依存順に並べ替え、`deps:` バッジ付き
 - **Steering / Roadmap ノード** — `.kiro/steering/` の生成状況と roadmap.md への入口。roadmap.md は `## Specs (dependency order)` をパースする
@@ -124,8 +126,6 @@ Copilot Chat を開けない場合は、プロンプトをクリップボード�
 - **Open raw transcript** / **Copy session id** — 調査・スクリプト用
 
 ### Overview ボード
-
-![cc-sdd Overview ボード: KPI ストリップ、Needs you / Running / Done / Failed の列、spec ポートフォリオ](./assets/overview.png)
 
 `cc-sdd: Open Overview`（または各ビューのタイトルバーのダッシュボードアイコン）で、リーダー / PM 向けのボードを開きます。
 

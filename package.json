@@ -2,7 +2,7 @@
   "name": "cc-sdd-vscode",
   "displayName": "cc-sdd Specs",
   "description": "Spec-Driven Development workbench for cc-sdd: spec explorer, approval gates, and task board for .kiro/specs.",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "publisher": "gotalab",
   "license": "MIT",
   "private": true,
@@ -423,7 +423,7 @@
     "check": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:watch": "vitest -w",
-    "package": "npm run build && npx @vscode/vsce package --no-dependencies"
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies --readme-path README.marketplace.md"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.319",
