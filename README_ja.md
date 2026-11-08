@@ -29,7 +29,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `/kiro-validate-impl` | ✅ `Validate implementation` ノード / `cc-sdd: Run Implementation Validation` |
 | `/kiro-spec-status` | ✅ `cc-sdd: Show Spec Status`（Markdown レポートを開く） |
 | `/kiro-validate-gap` / `validate-design` | ✅ spec 右クリックから実行 |
-| セッション再開 | ✅ **Sessions** ビュー。現在のワークスペースのセッションだけを一覧し、Runs コンソール / ターミナルで resume |
+| セッション再開 | ✅ **Sessions** ビュー。現在のワークスペースのセッションだけを一覧（トークン量・推定コスト付き）し、Runs コンソール / ターミナルで resume |
 | `/kiro-spec-batch` | ⚠️ roadmap.md の依存順で Spec 一覧を並べ替え・依存表示までは対応。batch 実行自体はスキル側 |
 | `/kiro-spec-quick` / `review` / `debug` / `verify-completion` | ⚠️ 起動 UI なし。セッション内で完結するワークフローのため（review は plugin の `kiro-reviewer` サブエージェントで補完可） |
 

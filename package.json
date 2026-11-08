@@ -172,6 +172,11 @@
         "icon": "$(console)"
       },
       {
+        "command": "ccSdd.saveRunTrace",
+        "title": "cc-sdd: Save Last Run Trace",
+        "icon": "$(save-as)"
+      },
+      {
         "command": "ccSdd.resumeSession",
         "title": "cc-sdd: Resume Session",
         "icon": "$(debug-start)"

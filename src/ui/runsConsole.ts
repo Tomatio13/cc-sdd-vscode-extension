@@ -1,5 +1,7 @@
 // "cc-sdd Runs" webview console: shows live progress of headless claude runs.
 import * as vscode from 'vscode';
+import { promises as fsPromises } from 'node:fs';
+import * as path from 'node:path';
 import {
   applyRunEvent,
   startClaudeRun,
@@ -8,6 +10,7 @@ import {
   type PhaseActionTarget,
   type RunSegment,
   type RunState,
+  type TokenUsage,
 } from '../run/claudeRunner';
 
 export type { PhaseActions, PhaseActionTarget };
@@ -22,6 +25,7 @@ export interface RunsConsoleOptions {
   openPath: (filePath: string) => Promise<void>;
   rerun: (skill: string, feature: string) => Promise<void>;
   resumeTerminal: (sessionId: string) => Promise<void>;
+  getRunsDir: () => string | undefined;
 }
 
 interface ConsoleMessage {
@@ -191,6 +195,10 @@ export class RunsConsole {
     run.pending = undefined;
     run.summary = undefined;
     run.phaseActions = undefined;
+    run.usage = undefined;
+    run.usageCostUsd = undefined;
+    run.turnUsage = undefined;
+    run.permissionDenials = undefined;
     run.endedAt = undefined;
     run.startedAt = Date.now();
     run.segments = [
@@ -209,6 +217,31 @@ export class RunsConsole {
     this.updateAll();
   }
 
+  /** Continues a finished run in place by resuming its Claude session. */
+  private continueRun(run: RunState, instruction: string, permissionMode: string): void {
+    if (!run.sessionId) {
+      void vscode.window.showWarningMessage(
+        'cc-sdd: this run has no session id, so it cannot be continued. Use Re-run instead.',
+      );
+      return;
+    }
+    if (this.handles.has(run.id)) {
+      return;
+    }
+    const prompt = instruction.trim() || 'Continue from where you left off.';
+    run.status = 'running';
+    run.permissionMode = permissionMode;
+    run.prompt = prompt;
+    run.summary = undefined;
+    run.phaseActions = undefined;
+    run.pending = undefined;
+    run.endedAt = undefined;
+    run.startedAt = Date.now();
+    run.segments.push({ kind: 'system', text: `continued · ${prompt}` });
+    this.attachRunner(run, { prompt, permissionMode, resume: run.sessionId });
+    this.updateAll();
+  }
+
   previewSession(input: {
     title: string;
     skill?: string;
@@ -217,6 +250,8 @@ export class RunsConsole {
     filePath: string;
     history: RunSegment[];
     defaultPermissionMode?: string;
+    usage?: TokenUsage;
+    costUsd?: number;
   }): void {
     this.seq += 1;
     const run: RunState = {
@@ -228,6 +263,8 @@ export class RunsConsole {
       status: 'preview',
       segments: [],
       history: input.history,
+      usage: input.usage,
+      usageCostUsd: input.costUsd,
       preview: {
         sessionId: input.sessionId,
         filePath: input.filePath,
@@ -490,6 +527,30 @@ export class RunsConsole {
           void this.options.runImplementation(run.feature);
         }
         return;
+      case 'continue':
+        if (run) {
+          const instruction = typeof typed.instruction === 'string' ? typed.instruction : '';
+          const mode =
+            typeof typed.permissionMode === 'string' && typed.permissionMode
+              ? typed.permissionMode
+              : run.permissionMode;
+          this.continueRun(run, instruction, mode);
+        }
+        return;
+      case 'trace':
+        if (run) {
+          if (run.preview) {
+            void this.saveSessionTrace(run);
+          } else {
+            void this.saveTrace(run);
+          }
+        }
+        return;
+      case 'exportSession':
+        if (run) {
+          void this.saveSessionTrace(run);
+        }
+        return;
       default:
         return;
     }
@@ -502,6 +563,82 @@ export class RunsConsole {
     } catch {
       // Actions are optional; keep the console usable without them.
     }
+  }
+
+  private async saveTrace(run: RunState): Promise<void> {
+    const dir = this.options.getRunsDir();
+    if (!dir) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+    try {
+      await fsPromises.mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const label = `${run.skill}-${run.feature || 'run'}`.replace(/[^A-Za-z0-9._-]+/g, '-');
+      const filePath = path.join(dir, `${stamp}-${label}.json`);
+      const payload = {
+        savedAt: new Date().toISOString(),
+        snapshot: run.status === 'running',
+        run,
+      };
+      await fsPromises.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      await this.options.openPath(filePath);
+      void vscode.window.showInformationMessage('cc-sdd: run trace saved.');
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `cc-sdd: could not save run trace: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private async saveSessionTrace(run: RunState): Promise<void> {
+    const dir = this.options.getRunsDir();
+    if (!dir || !run.preview) {
+      void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+    try {
+      await fsPromises.mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filePath = path.join(
+        dir,
+        `session-${stamp}-${run.preview.sessionId.slice(0, 8)}.json`,
+      );
+      const payload = {
+        savedAt: new Date().toISOString(),
+        session: {
+          id: run.preview.sessionId,
+          filePath: run.preview.filePath,
+          title: run.feature || run.skill,
+          usage: run.usage,
+          costUsd: run.usageCostUsd,
+          history: run.history,
+        },
+      };
+      await fsPromises.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      await this.options.openPath(filePath);
+      void vscode.window.showInformationMessage('cc-sdd: session trace saved.');
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `cc-sdd: could not save session trace: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Saves the most recent run or session preview (command palette entry point). */
+  saveLastTrace(): void {
+    const latest = this.runs[this.runs.length - 1];
+    if (!latest) {
+      void vscode.window.showInformationMessage(
+        'cc-sdd: no run to save yet. Run a phase or open a session first.',
+      );
+      return;
+    }
+    if (latest.preview) {
+      void this.saveSessionTrace(latest);
+      return;
+    }
+    void this.saveTrace(latest);
   }
 
   private buildHtml(webview: vscode.Webview): string {
@@ -604,6 +741,7 @@ export class RunsConsole {
       background: color-mix(in srgb, var(--cc-accent) 10%, transparent); }
     .mode { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
     .elapsed { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
+    .usage { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
     .spacer { flex: 1; }
 
     .progress { height: 2px; background: var(--cc-surface-strong); overflow: hidden; flex: none; }
@@ -729,9 +867,25 @@ export class RunsConsole {
     .summary.is-error .summary-label { color: var(--cc-error); }
     .summary-text { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
     .stats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .summary-actions { display: flex; gap: 6px; margin-top: 10px; }
     .stat-chip { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted);
       background: var(--cc-surface-strong); border: 1px solid var(--cc-border);
       border-radius: 999px; padding: 1px 8px; }
+
+    .metrics { margin: 10px 14px 0; border: 1px solid var(--cc-border); border-radius: 8px;
+      background: var(--cc-surface); }
+    .metrics > summary { cursor: pointer; padding: 8px 12px; list-style: none;
+      font-size: 11.5px; font-weight: 600; color: var(--cc-muted); }
+    .metrics > summary::-webkit-details-marker { display: none; }
+    .metrics[open] > summary { border-bottom: 1px solid var(--cc-border); }
+    .metrics-body { padding: 8px 12px 10px; overflow-x: auto; }
+    .metrics table { border-collapse: collapse; width: 100%;
+      font-family: var(--cc-mono); font-size: 11px; }
+    .metrics th, .metrics td { border-bottom: 1px solid var(--cc-border); padding: 3px 8px;
+      text-align: right; white-space: nowrap; }
+    .metrics th:first-child, .metrics td:first-child,
+    .metrics th:nth-child(2), .metrics td:nth-child(2) { text-align: left; }
+    .metrics th { color: var(--cc-muted); font-weight: 600; }
 
     .button-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 14px;
       border-top: 1px solid var(--cc-border); background: var(--cc-surface); }
@@ -764,6 +918,12 @@ export class RunsConsole {
       return s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + 'm' + Math.round(s % 60) + 's';
     };
     const fmtCost = (cost) => (typeof cost === 'number' ? '$' + cost.toFixed(cost < 1 ? 3 : 2) : '');
+    const fmtTokens = (value) => {
+      const number = Number(value) || 0;
+      if (number >= 1000000) return (number / 1000000).toFixed(1) + 'M';
+      if (number >= 1000) return (number / 1000).toFixed(1) + 'k';
+      return String(Math.round(number));
+    };
 
     function button(act, runId, label, secondary, phase) {
       const attrs = 'data-act="' + esc(act) + '" data-run="' + esc(runId) + '"' +
@@ -956,6 +1116,11 @@ export class RunsConsole {
         ' <span class="skilltag">/' + esc(run.skill) + '</span></span>';
       html += '<span class="pill ' + (pending ? 'waiting' : esc(run.status)) + '">' + esc(label) + '</span>';
       html += '<span class="mode">' + esc(run.permissionMode) + '</span>';
+      const usage = (run.summary && run.summary.usage) || run.usage;
+      if (usage && (usage.inputTokens || usage.outputTokens || usage.cacheReadTokens)) {
+        html += '<span class="usage" title="tokens: input / output / cache read / cache write">↑' +
+          fmtTokens(usage.inputTokens) + ' ↓' + fmtTokens(usage.outputTokens) + '</span>';
+      }
       if (running) {
         html += '<span class="elapsed" data-start="' + run.startedAt + '">' +
           fmtDuration(Date.now() - run.startedAt) + '</span>';
@@ -964,13 +1129,19 @@ export class RunsConsole {
       }
       html += '<span class="spacer"></span>';
       if (preview) {
+        html += button('trace', run.id, 'Trace', true);
         html += button('close', run.id, 'Close', true);
       } else {
         if (running) html += button('popout', run.id, 'New tab', true);
         html += button('copy', run.id, 'Copy prompt', true);
-        if (running) html += button('cancel', run.id, 'Cancel');
-        else html += button('rerun', run.id, 'Re-run', true);
-        if (!running) html += button('close', run.id, 'Close', true);
+        if (running) {
+          html += button('trace', run.id, 'Trace', true);
+          html += button('cancel', run.id, 'Cancel');
+        } else {
+          html += button('rerun', run.id, 'Re-run', true);
+          html += button('trace', run.id, 'Trace', true);
+          html += button('close', run.id, 'Close', true);
+        }
       }
       html += '</div>';
       return html;
@@ -990,6 +1161,22 @@ export class RunsConsole {
         '<select class="resume-mode" data-run="' + esc(run.id) + '">' + options + '</select>' +
         '<button data-act="resumeConsole" data-run="' + esc(run.id) + '">Resume in console</button>' +
         '<button class="secondary" data-act="resumeTerminal" data-run="' + esc(run.id) + '">Terminal</button>' +
+        '</div>';
+    }
+
+    function renderContinueBar(run) {
+      const modes = ['default', 'acceptEdits', 'bypassPermissions', 'plan'];
+      const preferred = modes.indexOf(run.permissionMode) >= 0 ? run.permissionMode : 'default';
+      let options = '';
+      modes.forEach(function (mode) {
+        options += '<option value="' + esc(mode) + '"' +
+          (mode === preferred ? ' selected' : '') + '>' + esc(mode) + '</option>';
+      });
+      return '<div class="resume-bar">' +
+        '<input class="resume-input continue-input" data-run="' + esc(run.id) +
+        '" placeholder="Message to continue this session (Enter to send)" />' +
+        '<select class="resume-mode" data-run="' + esc(run.id) + '">' + options + '</select>' +
+        '<button data-act="continue" data-run="' + esc(run.id) + '">Send</button>' +
         '</div>';
     }
 
@@ -1029,19 +1216,63 @@ export class RunsConsole {
       return html;
     }
 
-    function renderSummary(summary) {
-      const stats = [
-        fmtCost(summary.costUsd),
-        summary.turns ? summary.turns + ' turns' : '',
-        fmtDuration(summary.durationMs),
-      ].filter(Boolean);
-      let html = '<div class="summary' + (summary.isError ? ' is-error' : '') + '">';
-      html += '<div class="summary-label">' + (summary.isError ? 'run failed' : 'run finished') + '</div>';
-      html += '<div class="summary-text">' + esc(summary.text) + '</div>';
+    function renderTurnMetrics(run) {
+      const turns = (run.turnUsage || []).slice(-100);
+      if (turns.length < 2) return '';
+      const rows = turns.map(function (turn, index) {
+        const previous = index > 0 ? turns[index - 1].at : undefined;
+        const gap = turn.at && previous ? fmtDuration(turn.at - previous) : '';
+        return '<tr><td>' + (index + 1) + '</td><td>' + esc(turn.model || '') + '</td>' +
+          '<td>' + fmtTokens(turn.inputTokens) + '</td>' +
+          '<td>' + fmtTokens(turn.outputTokens) + '</td>' +
+          '<td>' + fmtTokens(turn.cacheReadTokens) + '</td>' +
+          '<td>' + fmtTokens(turn.cacheCreationTokens) + '</td>' +
+          '<td>' + esc(gap) + '</td></tr>';
+      }).join('');
+      return '<details class="metrics"><summary>Token usage · ' + turns.length + ' turns</summary>' +
+        '<div class="metrics-body"><table><thead><tr>' +
+        '<th>#</th><th>model</th><th>in</th><th>out</th><th>cache R</th><th>cache W</th><th>Δt</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div></details>';
+    }
+
+    function renderSummary(run) {
+      const summary = run.summary;
+      const usage = (summary && summary.usage) || run.usage;
+      const costUsd = summary && typeof summary.costUsd === 'number'
+        ? summary.costUsd
+        : run.usageCostUsd;
+      const stats = [];
+      if (usage) {
+        stats.push('↑' + fmtTokens(usage.inputTokens));
+        stats.push('↓' + fmtTokens(usage.outputTokens));
+        if (usage.cacheReadTokens) stats.push('cache R ' + fmtTokens(usage.cacheReadTokens));
+        if (usage.cacheCreationTokens) stats.push('cache W ' + fmtTokens(usage.cacheCreationTokens));
+      }
+      if (typeof costUsd === 'number') stats.push(fmtCost(costUsd));
+      if (summary && summary.turns) stats.push(summary.turns + ' turns');
+      if (summary && summary.durationMs) stats.push(fmtDuration(summary.durationMs));
+      if (run.permissionDenials) stats.push('denied ' + run.permissionDenials);
+      if (summary && summary.stopReason && summary.stopReason !== 'end_turn') {
+        stats.push('stop: ' + summary.stopReason);
+      }
+
+      const text = summary && summary.text ? summary.text : '';
+      if (!text && stats.length === 0) return '';
+
+      const label = run.status === 'preview'
+        ? 'session usage'
+        : (summary && summary.isError ? 'run failed' : 'run finished');
+      let html = '<div class="summary' + (summary && summary.isError ? ' is-error' : '') + '">';
+      html += '<div class="summary-label">' + label + '</div>';
+      if (text) html += '<div class="summary-text">' + esc(text) + '</div>';
       if (stats.length) {
         html += '<div class="stats">' + stats.map(function (stat) {
           return '<span class="stat-chip">' + esc(stat) + '</span>';
         }).join('') + '</div>';
+      }
+      if (run.status !== 'preview') {
+        html += '<div class="summary-actions">' +
+          button('trace', run.id, 'Save trace', true) + '</div>';
       }
       html += '</div>';
       return html;
@@ -1070,8 +1301,14 @@ export class RunsConsole {
       html += '<div class="log">' + renderHistory(run) + renderItems(buildItems(run.segments)) + '</div>';
       if (run.status === 'preview') html += renderResumeBar(run);
       if (run.pending) html += renderPending(run, run.pending);
-      if (run.summary && run.summary.text) html += renderSummary(run.summary);
+      if (!running) {
+        html += renderTurnMetrics(run);
+        html += renderSummary(run);
+      }
       html += renderActions(run);
+      if (!running && run.status !== 'preview' && run.sessionId) {
+        html += renderContinueBar(run);
+      }
       html += '</div>';
       return html;
     }
@@ -1174,7 +1411,9 @@ export class RunsConsole {
       const input = event.target.closest('.resume-input');
       if (!input) return;
       const runId = input.getAttribute('data-run');
-      const button = document.querySelector('[data-act="resumeConsole"][data-run="' + runId + '"]');
+      const button = document.querySelector(
+        '[data-act="resumeConsole"][data-run="' + runId + '"], [data-act="continue"][data-run="' + runId + '"]',
+      );
       if (button) button.click();
     });
 
@@ -1206,6 +1445,19 @@ export class RunsConsole {
         const select = document.querySelector('.resume-mode[data-run="' + runId + '"]');
         vscode.postMessage({
           type: 'resumeConsole',
+          runId: runId,
+          instruction: input ? input.value : '',
+          permissionMode: select ? select.value : undefined,
+        });
+        return;
+      }
+
+      if (act === 'continue') {
+        const runId = target.getAttribute('data-run');
+        const input = document.querySelector('.continue-input[data-run="' + runId + '"]');
+        const select = document.querySelector('.resume-mode[data-run="' + runId + '"]');
+        vscode.postMessage({
+          type: 'continue',
           runId: runId,
           instruction: input ? input.value : '',
           permissionMode: select ? select.value : undefined,

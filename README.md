@@ -23,7 +23,8 @@ Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 - **Task board** — parses `tasks.md` checkboxes, `(P)` markers, `_Boundary:_`, `_Depends:_`, and `_Requirements:_`. Toggle a task from the tree without leaving the editor.
-- **Sessions** — lists the Claude Code sessions recorded for the current workspace (titles come from the original `/kiro-…` prompt) and resumes them in the Runs console or an interactive terminal. Sessions from other projects are never shown.
+- **Sessions** — lists the Claude Code sessions recorded for the current workspace (titles come from the original `/kiro-…` prompt) with token totals and estimated cost, and resumes them in the Runs console or an interactive terminal. Sessions from other projects are never shown.
+- **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
 - **Status bar** — shows the active spec and the next action.
 - **Auto refresh** — watches the specs directory and reloads on changes.
 - **Installer** — runs `npx cc-sdd@latest` with the integration you pick.

@@ -72,6 +72,14 @@ Claude Code はプロジェクトごとにセッションを保存します。
 上限: 1,500 エントリ(超過分は先頭を省略)、1 テキスト 4,000 文字、ツール結果 1,200 文字。
 ファイルが 32MB を超える場合は末尾 32MB だけ読み、先頭の部分行を捨てます。
 
+## 使用量の集計
+
+セッションのトークン量・コストは、CLI がターンごとに書き出す **`cost-state` エントリ**(`totalCostUSD` / `modelUsage` / `totalAPIDuration` / `totalToolDuration` / 行数)の**最新値**を使います(`readSessionUsage`)。`cost-state` が無い古いログでは、assistant メッセージの usage(メッセージ ID で重複排除)と `result.total_cost_usd` の合計にフォールバックします。ファイルの mtime/size でキャッシュします。
+
+- Sessions ツリー: `2h ago · 120k tok · ~$0.88` のように表示
+- ツールチップ: 入力 / 出力 / cache read / cache write / 推定コスト / API 時間・ツール時間 / 追加・削除行数
+- プレビュー: `SESSION USAGE` カードに同じ内訳を表示
+
 ## 再開
 
 ### 同じカード内で再開(in-place)

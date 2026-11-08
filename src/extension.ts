@@ -516,6 +516,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getWorkspaceRoot: () => workspaceRoot(),
     getBinary: () =>
       resolveClaudeExecutable(configuration().get<string>('claudePath', 'claude')),
+    getRunsDir: () => {
+      const root = workspaceRoot();
+      return root ? path.join(resolveKiroDir(root, kiroDir()), 'runs') : undefined;
+    },
     getPhaseActions: async (skill: string, feature: string): Promise<PhaseActions> => {
       const record = (await loadSpecs()).find((candidate) => candidate.id === feature);
       if (!record) {
@@ -674,6 +678,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       filePath: session.filePath,
       history: readTranscriptSegments(session.filePath),
       defaultPermissionMode: configuration().get<string>('consolePermissionMode', 'default'),
+      usage: session.usage,
+      costUsd: session.costUsd,
     });
   };
 
@@ -943,6 +949,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('ccSdd.install', install),
     register('ccSdd.runs', async () => {
       runsConsole.show();
+    }),
+    register('ccSdd.saveRunTrace', async () => {
+      runsConsole.saveLastTrace();
     }),
     register('ccSdd.resumeSession', async (arg) => {
       await resumeSession(arg);

@@ -109,6 +109,16 @@ sequenceDiagram
 | 最終結果 | 4,000 文字 |
 | 履歴(セッション) | 1,500 エントリ |
 
+### 実行状態はどう決まるか
+
+- `result` メッセージで `summary.isError = is_error || subtype !== 'success'` を決める
+- ストリームが終了したら `onExit(exitCode, interrupted)`:
+  - `interrupted`(Cancel)→ `cancelled`
+  - `exitCode === 0 && !summary.isError` → `done`
+  - それ以外 → `error`
+- **`result` が来ずにストリームが閉じた場合は ERROR**(「done なのに summary が無い」を防ぐ)
+- `stop_reason` は状態判定には使わず、`end_turn` 以外のときサマリに `stop: max_tokens` のような警告チップを表示する
+
 ### Webview プロトコル(`ui/runsConsole.ts`)
 
 **host → webview**
@@ -145,6 +155,19 @@ sequenceDiagram
 - 実行中は進捗バー + ライブ経過時間、待機中は `WAITING FOR YOU`
 - 完了時は `RUN FINISHED` カード(コスト・ターン数・実行時間)
 - 承認ゲートを通過したフェーズでは `Approve …` / `Run next: …` / `Run implementation` を表示(`getPhaseActions`)
+
+### 完了後の継続(Continue)
+
+完了した run のカードには、そのセッションに追記する入力欄が出ます(明示的に `Close` するまで)。`Send`(または Enter)で `resume: <sessionId>` の新しいクエリを同じカード内で開始し、ログと usage を引き継ぎます。エージェントが本文テキストで質問を返した場合も、そのまま回答して作業を続けられます(AskUserQuestion の選択肢カードが出ている場合はそちらで回答)。
+
+### 使用量とデバッグ
+
+- `result.modelUsage`(全モデル合計)を権威値として、入力 / 出力 / キャッシュ(読み取り・書き込み)/ コストを表示する
+- assistant メッセージの usage はプロバイダによって 0 のことがあるため、0 のターンは行を作らない(最終値は result で確定)
+- ターン別の `Token usage · N turns` 表(入力 / 出力 / cache read / cache write / Δt)を折りたたみ表示
+- `Trace` ボタンは**実行中でも押せる**(その時点のスナップショット。JSON に `snapshot: true` が入る)。完了カードのヘッダー / RUN FINISHED サマリ内の `Save trace`、コマンドパレットの `cc-sdd: Save Last Run Trace` からも保存できる。出力先は `.kiro/runs/<timestamp>-<skill>-<feature>.json`(usage / turnUsage / segments / history / summary)
+- セッションのプレビューカードでも `Trace` を押せる(そのセッションの履歴と usage を `.kiro/runs/session-<timestamp>-<id>.json` に保存)
+- `permission_denials` はサマリの `denied N` チップに表示
 
 ### 権限モードの既定
 

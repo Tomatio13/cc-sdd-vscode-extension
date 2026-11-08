@@ -3,7 +3,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { RunSegment } from '../run/claudeRunner';
+import type { RunSegment, TokenUsage } from '../run/claudeRunner';
 
 export interface SessionRecord {
   id: string;
@@ -16,6 +16,12 @@ export interface SessionRecord {
   sizeBytes: number;
   filePath: string;
   lastMessage?: string;
+  usage?: TokenUsage;
+  costUsd?: number;
+  apiMs?: number;
+  toolMs?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
 }
 
 export interface SessionHead {
@@ -229,6 +235,205 @@ export const readSessionTail = (filePath: string, maxBytes = 128 * 1024): string
 
 const normalizePath = (value: string): string => value.replace(/[\\/]+$/, '');
 
+interface SessionUsageCacheEntry {
+  mtimeMs: number;
+  size: number;
+  usage?: TokenUsage;
+  costUsd?: number;
+  apiMs?: number;
+  toolMs?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+const sessionUsageCache = new Map<string, SessionUsageCacheEntry>();
+
+const zeroUsage = (): TokenUsage => ({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+});
+
+const numeric = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+const readTailLines = (filePath: string, maxBytes: number): string[] => {
+  const stat = fs.statSync(filePath);
+  const start = Math.max(0, stat.size - maxBytes);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    let text = buffer.toString('utf8');
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n');
+      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+    }
+    return text.split('\n');
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+const sumModelUsage = (modelUsage: unknown): TokenUsage | undefined => {
+  if (typeof modelUsage !== 'object' || modelUsage === null) {
+    return undefined;
+  }
+  const total = zeroUsage();
+  let any = false;
+  for (const entry of Object.values(modelUsage as Record<string, unknown>)) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue;
+    }
+    const typed = entry as Record<string, unknown>;
+    total.inputTokens += numeric(typed.inputTokens);
+    total.outputTokens += numeric(typed.outputTokens);
+    total.cacheReadTokens += numeric(typed.cacheReadInputTokens);
+    total.cacheCreationTokens += numeric(typed.cacheCreationInputTokens);
+    any = true;
+  }
+  return any ? total : undefined;
+};
+
+export interface SessionUsageInfo {
+  usage?: TokenUsage;
+  costUsd?: number;
+  apiMs?: number;
+  toolMs?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+/**
+ * Reads session usage. The CLI writes periodic `cost-state` entries with
+ * cumulative totals; the latest one is authoritative. Transcripts without
+ * them fall back to summing assistant usage and result costs.
+ * Cached by file mtime/size.
+ */
+export const readSessionUsage = (filePath: string): SessionUsageInfo => {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return {};
+  }
+
+  const cached = sessionUsageCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    const { mtimeMs: _mtimeMs, size: _size, ...info } = cached;
+    return info;
+  }
+
+  let info: SessionUsageInfo = {};
+
+  // Fast path: the latest cost-state entry lives near the end of the file.
+  try {
+    let latest: Record<string, unknown> | undefined;
+    for (const line of readTailLines(filePath, 256 * 1024)) {
+      if (!line.includes('cost-state')) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        if (parsed?.type === 'cost-state') {
+          latest = parsed;
+        }
+      } catch {
+        // Ignore malformed lines.
+      }
+    }
+    if (latest) {
+      info = {
+        usage: sumModelUsage(latest.modelUsage),
+        costUsd: typeof latest.totalCostUSD === 'number' ? latest.totalCostUSD : undefined,
+        apiMs: typeof latest.totalAPIDuration === 'number' ? latest.totalAPIDuration : undefined,
+        toolMs:
+          typeof latest.totalToolDuration === 'number' ? latest.totalToolDuration : undefined,
+        linesAdded:
+          typeof latest.totalLinesAdded === 'number' ? latest.totalLinesAdded : undefined,
+        linesRemoved:
+          typeof latest.totalLinesRemoved === 'number' ? latest.totalLinesRemoved : undefined,
+      };
+    }
+  } catch {
+    // Fall through to the full scan.
+  }
+
+  if (!info.usage && info.costUsd === undefined) {
+    let text: string;
+    try {
+      text = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return {};
+    }
+
+    const byMessageId = new Map<string, TokenUsage>();
+    let costUsd = 0;
+    let anonymous = 0;
+
+    for (const line of text.split('\n')) {
+      if (!line.trim()) {
+        continue;
+      }
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (typeof entry !== 'object' || entry === null) {
+        continue;
+      }
+      const typed = entry as {
+        type?: unknown;
+        total_cost_usd?: unknown;
+        message?: { id?: unknown; usage?: Record<string, unknown> };
+      };
+      if (typed.type === 'assistant' && typed.message?.usage) {
+        const usage = typed.message.usage;
+        const key =
+          typeof typed.message.id === 'string'
+            ? typed.message.id
+            : `anonymous-${(anonymous += 1)}`;
+        byMessageId.set(key, {
+          inputTokens: numeric(usage.input_tokens),
+          outputTokens: numeric(usage.output_tokens),
+          cacheReadTokens: numeric(usage.cache_read_input_tokens),
+          cacheCreationTokens: numeric(usage.cache_creation_input_tokens),
+        });
+      } else if (typed.type === 'result' && typeof typed.total_cost_usd === 'number') {
+        costUsd += typed.total_cost_usd;
+      }
+    }
+
+    let usage: TokenUsage | undefined;
+    if (byMessageId.size > 0) {
+      usage = zeroUsage();
+      for (const item of byMessageId.values()) {
+        usage.inputTokens += item.inputTokens;
+        usage.outputTokens += item.outputTokens;
+        usage.cacheReadTokens += item.cacheReadTokens;
+        usage.cacheCreationTokens += item.cacheCreationTokens;
+      }
+    }
+    info = { usage, costUsd: costUsd > 0 ? costUsd : undefined };
+  }
+
+  sessionUsageCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, ...info });
+  return info;
+};
+
+export const formatTokenCount = (value: number): string => {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}k`;
+  }
+  return String(Math.round(value));
+};
+
 /**
  * Lists stored sessions for the workspace, newest first.
  * Sessions from other projects are filtered out even if the directory collides.
@@ -263,6 +468,7 @@ export const listSessions = (
       continue;
     }
     const id = entry.name.slice(0, -'.jsonl'.length);
+    const usageInfo = readSessionUsage(filePath);
     sessions.push({
       id,
       title: head.title?.trim() || `Session ${id.slice(0, 8)}`,
@@ -274,6 +480,12 @@ export const listSessions = (
       sizeBytes: stat.size,
       filePath,
       lastMessage: readSessionTail(filePath),
+      usage: usageInfo.usage,
+      costUsd: usageInfo.costUsd,
+      apiMs: usageInfo.apiMs,
+      toolMs: usageInfo.toolMs,
+      linesAdded: usageInfo.linesAdded,
+      linesRemoved: usageInfo.linesRemoved,
     });
   }
 

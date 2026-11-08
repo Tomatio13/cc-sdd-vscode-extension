@@ -26,6 +26,22 @@ export interface RunSummary {
   costUsd?: number;
   turns?: number;
   durationMs?: number;
+  usage?: TokenUsage;
+  denials?: number;
+  stopReason?: string;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+export interface TurnUsage extends TokenUsage {
+  id: string;
+  model?: string;
+  at?: number;
 }
 
 export interface PhaseActionTarget {
@@ -69,6 +85,10 @@ export interface RunState {
   status: RunStatus;
   segments: RunSegment[];
   history?: RunSegment[];
+  usage?: TokenUsage;
+  usageCostUsd?: number;
+  turnUsage?: TurnUsage[];
+  permissionDenials?: number;
   summary?: RunSummary;
   sessionId?: string;
   model?: string;
@@ -84,7 +104,18 @@ export type RunEvent =
   | { kind: 'assistant'; text?: string; tool?: { name: string; summary: string } }
   | { kind: 'toolresult'; text: string; isError: boolean }
   | { kind: 'pending'; pending: PendingInteraction }
-  | { kind: 'result'; isError: boolean; text: string; costUsd?: number; turns?: number; durationMs?: number };
+  | { kind: 'usage'; id?: string; model?: string; at?: number; usage: TokenUsage }
+  | {
+      kind: 'result';
+      isError: boolean;
+      text: string;
+      costUsd?: number;
+      turns?: number;
+      durationMs?: number;
+      usage?: TokenUsage;
+      denials?: number;
+      stopReason?: string;
+    };
 
 const shorten = (value: string, max = 200): string =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -176,14 +207,65 @@ export interface ClaudeMessage {
   subtype?: string;
   session_id?: string;
   model?: string;
-  message?: { content?: unknown };
+  timestamp?: string;
+  message?: {
+    id?: string;
+    model?: string;
+    content?: unknown;
+    usage?: Record<string, unknown>;
+  };
   result?: unknown;
   total_cost_usd?: number;
   num_turns?: number;
   duration_ms?: number;
   is_error?: boolean;
   error?: unknown;
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      costUSD?: number;
+    }
+  >;
+  permission_denials?: unknown[];
+  stop_reason?: string | null;
 }
+
+const toNumber = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+export const emptyUsage = (): TokenUsage => ({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+});
+
+const usageFromSnake = (usage: Record<string, unknown> | undefined): TokenUsage => ({
+  inputTokens: toNumber(usage?.input_tokens),
+  outputTokens: toNumber(usage?.output_tokens),
+  cacheReadTokens: toNumber(usage?.cache_read_input_tokens),
+  cacheCreationTokens: toNumber(usage?.cache_creation_input_tokens),
+});
+
+const usageFromResult = (
+  modelUsage: ClaudeMessage['modelUsage'],
+): TokenUsage | undefined => {
+  if (!modelUsage) {
+    return undefined;
+  }
+  const total = emptyUsage();
+  for (const entry of Object.values(modelUsage)) {
+    total.inputTokens += toNumber(entry.inputTokens);
+    total.outputTokens += toNumber(entry.outputTokens);
+    total.cacheReadTokens += toNumber(entry.cacheReadInputTokens);
+    total.cacheCreationTokens += toNumber(entry.cacheCreationInputTokens);
+  }
+  return total;
+};
 
 const asClaudeMessage = (value: unknown): ClaudeMessage | undefined =>
   typeof value === 'object' && value !== null ? (value as ClaudeMessage) : undefined;
@@ -213,7 +295,18 @@ export const eventsFromClaudeMessage = (parsed: unknown): RunEvent[] => {
       break;
     }
     case 'assistant': {
-      const content = message.message?.content;
+      const messageBody = message.message;
+      const usage = messageBody?.usage;
+      if (usage) {
+        events.push({
+          kind: 'usage',
+          id: messageBody?.id,
+          model: messageBody?.model,
+          at: message.timestamp ? Date.parse(message.timestamp) : undefined,
+          usage: usageFromSnake(usage),
+        });
+      }
+      const content = messageBody?.content;
       if (Array.isArray(content)) {
         for (const block of content) {
           if (typeof block !== 'object' || block === null) {
@@ -254,6 +347,9 @@ export const eventsFromClaudeMessage = (parsed: unknown): RunEvent[] => {
       break;
     }
     case 'result': {
+      const denials = Array.isArray(message.permission_denials)
+        ? message.permission_denials.length
+        : undefined;
       events.push({
         kind: 'result',
         isError: message.is_error === true || message.subtype !== 'success',
@@ -261,6 +357,9 @@ export const eventsFromClaudeMessage = (parsed: unknown): RunEvent[] => {
         costUsd: typeof message.total_cost_usd === 'number' ? message.total_cost_usd : undefined,
         turns: typeof message.num_turns === 'number' ? message.num_turns : undefined,
         durationMs: typeof message.duration_ms === 'number' ? message.duration_ms : undefined,
+        usage: usageFromResult(message.modelUsage),
+        denials,
+        stopReason: typeof message.stop_reason === 'string' ? message.stop_reason : undefined,
       });
       break;
     }
@@ -283,6 +382,12 @@ export const eventsFromClaudeLine = (line: string): RunEvent[] => {
 };
 
 const SEGMENT_LIMIT = 600;
+const TURN_LIMIT = 300;
+
+// Assistant messages that share a message id carry cumulative usage; keep the
+// latest snapshot per id so live totals are never double-counted.
+const usageSnapshots = new WeakMap<RunState, Map<string, TokenUsage>>();
+
 
 export const describeRunEvent = (event: RunEvent): RunSegment[] => {
   switch (event.kind) {
@@ -316,6 +421,8 @@ export const describeRunEvent = (event: RunEvent): RunSegment[] => {
       return [{ kind: 'toolresult', text: event.text, isError: event.isError }];
     case 'pending':
       return [];
+    case 'usage':
+      return [];
     case 'result':
       // The summary block renders separately in the console.
       return [];
@@ -334,6 +441,59 @@ export const applyRunEvent = (state: RunState, event: RunEvent): void => {
     state.pending = event.pending;
     return;
   }
+  if (event.kind === 'usage') {
+    const eventTotal =
+      event.usage.inputTokens +
+      event.usage.outputTokens +
+      event.usage.cacheReadTokens +
+      event.usage.cacheCreationTokens;
+    if (eventTotal === 0) {
+      // Some providers report zeroed usage while streaming; the result's
+      // modelUsage is authoritative, so do not render empty turn rows.
+      return;
+    }
+    const snapshots = usageSnapshots.get(state) ?? new Map<string, TokenUsage>();
+    usageSnapshots.set(state, snapshots);
+    const totals = state.usage ?? emptyUsage();
+    const turns = state.turnUsage ?? [];
+    state.usage = totals;
+    state.turnUsage = turns;
+
+    const id = event.id ?? `turn-${turns.length + 1}`;
+    const previous = snapshots.get(id) ?? emptyUsage();
+    const delta: TokenUsage = {
+      inputTokens: Math.max(0, event.usage.inputTokens - previous.inputTokens),
+      outputTokens: Math.max(0, event.usage.outputTokens - previous.outputTokens),
+      cacheReadTokens: Math.max(0, event.usage.cacheReadTokens - previous.cacheReadTokens),
+      cacheCreationTokens: Math.max(
+        0,
+        event.usage.cacheCreationTokens - previous.cacheCreationTokens,
+      ),
+    };
+    if (event.id) {
+      snapshots.set(id, event.usage);
+    }
+    totals.inputTokens += delta.inputTokens;
+    totals.outputTokens += delta.outputTokens;
+    totals.cacheReadTokens += delta.cacheReadTokens;
+    totals.cacheCreationTokens += delta.cacheCreationTokens;
+
+    const row = turns.find((turn) => turn.id === id);
+    if (row) {
+      row.inputTokens = event.usage.inputTokens;
+      row.outputTokens = event.usage.outputTokens;
+      row.cacheReadTokens = event.usage.cacheReadTokens;
+      row.cacheCreationTokens = event.usage.cacheCreationTokens;
+      row.model = row.model ?? event.model;
+      row.at = row.at ?? event.at;
+    } else {
+      turns.push({ id, model: event.model, at: event.at, ...event.usage });
+    }
+    if (turns.length > TURN_LIMIT) {
+      turns.splice(0, turns.length - TURN_LIMIT);
+    }
+    return;
+  }
   if (event.kind === 'result') {
     state.summary = {
       isError: event.isError,
@@ -341,7 +501,19 @@ export const applyRunEvent = (state: RunState, event: RunEvent): void => {
       costUsd: event.costUsd,
       turns: event.turns,
       durationMs: event.durationMs,
+      usage: event.usage,
+      denials: event.denials,
+      stopReason: event.stopReason,
     };
+    if (event.usage) {
+      state.usage = event.usage;
+    }
+    if (typeof event.costUsd === 'number') {
+      state.usageCostUsd = event.costUsd;
+    }
+    if (typeof event.denials === 'number') {
+      state.permissionDenials = event.denials;
+    }
     state.pending = undefined;
     return;
   }
@@ -498,8 +670,15 @@ export const startClaudeRun = (options: StartClaudeRunOptions): ClaudeRunHandle 
           break;
         }
       }
-      if (!sawResult && cancelled) {
-        options.onEvent({ kind: 'result', isError: false, text: 'Run cancelled.' });
+      if (!sawResult) {
+        // The stream ended without a result message: never report "done".
+        options.onEvent({
+          kind: 'result',
+          isError: !cancelled,
+          text: cancelled
+            ? 'Run cancelled.'
+            : 'The run ended without a result message (stream closed).',
+        });
       }
       options.onExit(cancelled ? -1 : 0, cancelled);
     } catch (error) {

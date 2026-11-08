@@ -196,6 +196,99 @@ describe('applyRunEvent', () => {
   });
 });
 
+describe('usage accounting', () => {
+  it('dedupes assistant usage by message id', () => {
+    const run = newRun();
+    const first = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-1',
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 50,
+          cache_creation_input_tokens: 0,
+        },
+        content: [{ type: 'text', text: 'First block' }],
+      },
+    });
+    const second = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-1',
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 120,
+          output_tokens: 15,
+          cache_read_input_tokens: 50,
+          cache_creation_input_tokens: 0,
+        },
+        content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'x' } }],
+      },
+    });
+
+    for (const line of [first, second]) {
+      for (const event of eventsFromClaudeLine(line)) {
+        applyRunEvent(run, event);
+      }
+    }
+
+    expect(run.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 15,
+      cacheReadTokens: 50,
+      cacheCreationTokens: 0,
+    });
+    expect(run.turnUsage).toHaveLength(1);
+  });
+
+  it('uses modelUsage as the authoritative total on result', () => {
+    const run = newRun();
+    const assistant = JSON.stringify({
+      type: 'assistant',
+      message: { id: 'msg-1', usage: { input_tokens: 100, output_tokens: 10 } },
+    });
+    for (const event of eventsFromClaudeLine(assistant)) {
+      applyRunEvent(run, event);
+    }
+
+    const result = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'ok',
+      total_cost_usd: 0.05,
+      num_turns: 2,
+      duration_ms: 1000,
+      modelUsage: {
+        'claude-sonnet-4-6': {
+          inputTokens: 300,
+          outputTokens: 40,
+          cacheReadInputTokens: 900,
+          cacheCreationInputTokens: 70,
+          costUSD: 0.05,
+        },
+      },
+      permission_denials: [{}, {}],
+      stop_reason: 'end_turn',
+    });
+    for (const event of eventsFromClaudeLine(result)) {
+      applyRunEvent(run, event);
+    }
+
+    expect(run.usage).toEqual({
+      inputTokens: 300,
+      outputTokens: 40,
+      cacheReadTokens: 900,
+      cacheCreationTokens: 70,
+    });
+    expect(run.usageCostUsd).toBe(0.05);
+    expect(run.permissionDenials).toBe(2);
+    expect(run.summary?.stopReason).toBe('end_turn');
+  });
+});
+
 describe('extractQuestions', () => {
   it('maps AskUserQuestion input to renderable specs', () => {
     const questions = extractQuestions({

@@ -4,11 +4,13 @@ import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   encodeProjectDir,
+  formatTokenCount,
   formatWhen,
   listSessions,
   parseSessionText,
   readSessionHead,
   readSessionTail,
+  readSessionUsage,
   transcriptSegmentsFromLines,
 } from '../src/core/sessions';
 
@@ -217,6 +219,121 @@ describe('transcriptSegmentsFromLines', () => {
       }),
     ];
     expect(transcriptSegmentsFromLines(lines)).toEqual([]);
+  });
+});
+
+describe('readSessionUsage', () => {
+  it('dedupes usage by message id and sums result costs', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'usage.jsonl');
+    const lines = [
+      {
+        type: 'assistant',
+        message: {
+          id: 'm1',
+          usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 50 },
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          id: 'm1',
+          usage: { input_tokens: 120, output_tokens: 12, cache_read_input_tokens: 50 },
+        },
+      },
+      {
+        type: 'assistant',
+        message: { id: 'm2', usage: { input_tokens: 30, output_tokens: 5 } },
+      },
+      { type: 'result', total_cost_usd: 0.02 },
+      { type: 'result', total_cost_usd: 0.03 },
+      // Duplicate final message id should not be counted again.
+      {
+        type: 'assistant',
+        message: { id: 'm2', usage: { input_tokens: 30, output_tokens: 5 } },
+      },
+    ];
+    fs.writeFileSync(filePath, lines.map((line) => JSON.stringify(line)).join('\n'));
+
+    const usage = readSessionUsage(filePath);
+    expect(usage.usage).toEqual({
+      inputTokens: 150,
+      outputTokens: 17,
+      cacheReadTokens: 50,
+      cacheCreationTokens: 0,
+    });
+    expect(usage.costUsd).toBeCloseTo(0.05);
+  });
+
+  it('returns empty data for a missing file', () => {
+    expect(readSessionUsage('/no/such/session.jsonl')).toEqual({});
+  });
+
+  it('prefers the latest cost-state entry', () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, 'cost.jsonl');
+    const lines = [
+      {
+        type: 'assistant',
+        message: { id: 'm1', usage: { input_tokens: 1, output_tokens: 1 } },
+      },
+      {
+        type: 'cost-state',
+        totalCostUSD: 0.5,
+        totalAPIDuration: 12000,
+        totalToolDuration: 3000,
+        totalLinesAdded: 10,
+        totalLinesRemoved: 2,
+        modelUsage: {
+          'model-a': {
+            inputTokens: 1000,
+            outputTokens: 100,
+            cacheReadInputTokens: 500,
+            cacheCreationInputTokens: 50,
+            costUSD: 0.5,
+          },
+        },
+      },
+      {
+        type: 'cost-state',
+        totalCostUSD: 0.8,
+        totalAPIDuration: 20000,
+        totalToolDuration: 5000,
+        totalLinesAdded: 20,
+        totalLinesRemoved: 4,
+        modelUsage: {
+          'model-a': {
+            inputTokens: 2000,
+            outputTokens: 200,
+            cacheReadInputTokens: 800,
+            cacheCreationInputTokens: 60,
+            costUSD: 0.8,
+          },
+        },
+      },
+    ];
+    fs.writeFileSync(filePath, lines.map((line) => JSON.stringify(line)).join('\n'));
+
+    const info = readSessionUsage(filePath);
+    expect(info.usage).toEqual({
+      inputTokens: 2000,
+      outputTokens: 200,
+      cacheReadTokens: 800,
+      cacheCreationTokens: 60,
+    });
+    expect(info.costUsd).toBeCloseTo(0.8);
+    expect(info.apiMs).toBe(20000);
+    expect(info.toolMs).toBe(5000);
+    expect(info.linesAdded).toBe(20);
+    expect(info.linesRemoved).toBe(4);
+  });
+});
+
+describe('formatTokenCount', () => {
+  it('formats compact token counts', () => {
+    expect(formatTokenCount(999)).toBe('999');
+    expect(formatTokenCount(1234)).toBe('1.2k');
+    expect(formatTokenCount(1_234_567)).toBe('1.2M');
   });
 });
 
