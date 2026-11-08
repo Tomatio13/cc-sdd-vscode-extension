@@ -1,18 +1,16 @@
 # cc-sdd Specs（VS Code 拡張機能）
 
-[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード、headless な **Runs** コンソール、Claude Code セッションの再開）を追加します。
+[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード、headless な **Runs** コンソール、Claude Code セッションの再開、並列ワーカーを俯瞰する **Overview** ボード）を追加します。
 
 <div align="center" style="margin-bottom: 1rem; font-size: 1.1rem;"><sub>
 <a href="./README.md">English</a> | 日本語
 </sub></div>
 
-これは [plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md) の **L1 + L2** 実装に、L3 の最初のスライスを加えたものです。承認と状態遷移は拡張側に保持し、スキルの呼び出しはあなたが使っているエージェント（ターミナル / Claude Code for VS Code パネル / 内蔵の headless Runs コンソール = Claude Agent SDK）に任せます。cc-sdd のスキル本体は cc-sdd インストーラ（`npx cc-sdd@latest --claude-skills`）が入れます。拡張はその上の UI レイヤーです。
-
 設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
-![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバーと、/kiro-impl を実行中の cc-sdd Runs コンソール](./assets/workbench.png)
+![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバー、cc-sdd Overview ボード、/kiro-spec-requirements を実行中の cc-sdd Runs コンソール](./assets/workbench.png)
 
-<div align="center"><sub>左に Specs / Tasks / Sessions。右の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。</sub></div>
+<div align="center"><sub>左に Specs / Tasks / Sessions。中央の Overview ボードは対応待ち・実行中・当日コスト・spec 進捗をまとめて表示します。右の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。</sub></div>
 
 ## フローの対応範囲
 
@@ -30,8 +28,9 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `/kiro-spec-status` | ✅ `cc-sdd: Show Spec Status`（Markdown レポートを開く） |
 | `/kiro-validate-gap` / `validate-design` | ✅ spec 右クリックから実行 |
 | セッション再開 | ✅ **Sessions** ビュー。現在のワークスペースのセッションだけを一覧（トークン量・推定コスト付き）し、Runs コンソール / ターミナルで resume |
+| 並列作業の全体監視 | ✅ **Overview** ボード。ライブ run・トランスクリプト末尾が作業中のセッション・spec の進捗を 1 画面に集約（Needs you / Running / Done / Failed） |
 | `/kiro-spec-batch` | ⚠️ roadmap.md の依存順で Spec 一覧を並べ替え・依存表示までは対応。batch 実行自体はスキル側 |
-| `/kiro-spec-quick` / `review` / `debug` / `verify-completion` | ⚠️ 起動 UI なし。セッション内で完結するワークフローのため（review は plugin の `kiro-reviewer` サブエージェントで補完可） |
+| `/kiro-spec-quick` / `review` / `debug` / `verify-completion` | ⚠️ 起動 UI なし。セッション内で完結するワークフローのため、拡張からは起動しない |
 
 ## 何ができるか
 
@@ -41,8 +40,9 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 - **Steering / Roadmap ノード** — `.kiro/steering/` の生成状況と roadmap.md への入口。roadmap.md は `## Specs (dependency order)` をパースする
 - **Approval gates** — 承認前に成果物を検証。必須セクションの欠落や未解決の `{{PLACEHOLDER}}` は承認をブロックし、より軽い問題は明示的な確認が必要
 - **Phase launcher** — `/kiro-spec-requirements`、`/kiro-spec-design`、`/kiro-spec-tasks`、`/kiro-impl`、`/kiro-validate-*` を Claude Code / Codex / Copilot Chat / OpenCode / カスタムコマンド / クリップボードで実行
+- **Overview ボード** — リーダー / PM 向けの監視画面。ライブ run、トランスクリプト末尾が作業中のセッション、spec の承認・タスク進捗をまとめて表示。`Needs you` / `Running` / `Done` / `Failed` の Kanban、当日コスト・タスク KPI、spec ポートフォリオ付き。カードで run を開き、spec カードで `tasks.md` を開く
 - **Task board** — `tasks.md` のチェックボックス、`(P)`、`_Boundary:_`、`_Depends:_`、`_Requirements:_` をツリー表示。エディタを開かずにタスクを切替
-- **Status bar** — アクティブ spec と次のアクションを常時表示
+- **Status bar** — アクティブ spec と次のアクションを常時表示。run 実行中は `N waiting · M running` も表示
 - **Auto refresh** — `.kiro/` 配下を監視し、変更時に再読込。フォーカス復帰時と spec 配下の保存時にも再検証
 - **Installer** — 好きな統合を選んで `npx cc-sdd@latest` を実行
 - **JSON Schema** — `.kiro/specs/*/spec.json` の編集を検証
@@ -80,6 +80,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `cc-sdd: Install Skills` | 統合先を選んで `npx cc-sdd@latest` を実行 |
 | `cc-sdd: Select Active Spec` | Tasks ビューが追従する spec を選択 |
 | `cc-sdd: Show Spec Status` | フェーズと承認の Markdown サマリを開く |
+| `cc-sdd: Open Overview` | リーダー / PM 向けの監視ボードを開く（Specs / Tasks / Sessions のタイトルバーのダッシュボードアイコンからも起動） |
 | Approve / Revoke Phase | フェーズノードのコンテキストアクション |
 | Run Phase | 未生成 / draft / review のフェーズのコンテキストアクション |
 | Run Implementation | 実装可能な spec のコンテキストアクション（🚀） |
@@ -122,22 +123,37 @@ Copilot Chat を開けない場合は、プロンプトをクリップボード�
 - **Resume in terminal** — `claude --resume <session-id>` を対話ターミナルで起動
 - **Open raw transcript** / **Copy session id** — 調査・スクリプト用
 
+### Overview ボード
+
+![cc-sdd Overview ボード: KPI ストリップ、Needs you / Running / Done / Failed の列、spec ポートフォリオ](./assets/overview.png)
+
+`cc-sdd: Open Overview`（または各ビューのタイトルバーのダッシュボードアイコン）で、リーダー / PM 向けのボードを開きます。
+
+- **KPI ストリップ** — あなたの対応待ち（権限確認・質問・承認）、実行中のワーカー、当日の失敗、タスク完了率、当日の推定コスト
+- **ステータスバー** — run が動いている間は `N waiting · M running` を表示し、クリックでボードを開く
+- **Kanban** — `Needs you` / `Running` / `Done` / `Failed`。カード 1 枚が headless run（このウィンドウ）、直近に動いた Claude Code セッション（別ウィンドウ / ターミナル）、または承認待ちフェーズ。カードをクリックすると run タブ、セッションプレビュー、成果物が開く
+- **Spec ポートフォリオ** — 全 spec のフェーズ、承認ピル、`tasks.md` 進捗、稼働ワーカー数、当日コスト、次のアクション。spec カードをクリックすると `tasks.md` が開く
+- **フィルタ** — KPI をクリックして列にフォーカス、ドロップダウンで spec を絞り込み
+
+このウィンドウの run 状態は正確です。別ウィンドウの作業はトランスクリプト末尾から推定します。最後のターンがまだ開いているセッションは **Active elsewhere**、未回答の `AskUserQuestion` は **Needs you** に出し、完了済みのトランスクリプトはボードに出しません（**Sessions** ビューには残ります）。永続的なクロスウィンドウの run 履歴は次のステップ（run の永続化）です。
+
 ## ワークスペースのスコープ
 
-MVP は最初のワークスペースフォルダに追従します。同じフォルダ内の別の specs ルートには `ccSdd.kiroDir` を使用してください。マルチルート対応は Phase 3 の候補です。
+MVP は最初のワークスペースフォルダに追従します。同じフォルダ内の別の specs ルートには `ccSdd.kiroDir` を使用してください。マルチルート対応は将来の候補です。
 
 ## ソースから実行
 
 ```bash
-cd tools/cc-sdd-vscode
+git clone https://github.com/Tomatio13/cc-sdd-vscode-extension.git
+cd cc-sdd-vscode-extension
 npm install
 npm run build
 npm test
 ```
 
-VS Code で `tools/cc-sdd-vscode` をワークスペースとして開き <kbd>F5</kbd> を押すと、同梱の `.vscode/launch.json` が Extension Development Host を起動します。
+VS Code でリポジトリのフォルダを開き <kbd>F5</kbd> を押すと、同梱の `.vscode/launch.json` が Extension Development Host を起動します。
 
-試すには `.kiro/specs/<feature>/spec.json` を含むフォルダを開いてください。リポジトリ自身の `.kiro/specs/`（`photo-albums-en` など）が fixture として使えます。
+試すには `.kiro/specs/<feature>/spec.json` を含むフォルダを開いてください。拡張はそのフォルダを直接読むため、このリポジトリである必要はありません。
 
 VSIX の作成:
 
@@ -154,7 +170,7 @@ npm run package
 
 ## 未対応
 
-[plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md) の Phase 3 以降: headless CLI ランナーのストリーミング進捗（Claude Code / Codex / OpenCode アダプタ）、拡張内でのサブエージェント実行制御、Code OSS fork の検討。
+[plan.md](https://github.com/gotalab/cc-sdd/blob/main/plan.md) のロードマップ: Codex / OpenCode の headless アダプタ、拡張内でのサブエージェント実行制御、クロスウィンドウを正確に扱う run 履歴の永続化、タスク単位の Kanban、Code OSS fork の検討。
 
 ## ライセンス
 

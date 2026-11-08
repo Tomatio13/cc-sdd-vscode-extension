@@ -150,6 +150,7 @@ workbench 自体に埋め込みたいとき。まず拡張で 8 割の体験を�
 - [ ] サブエージェント（implementer / reviewer / debugger）の実行制御を実装する（現状は `/kiro-impl` スキル内の Agent ツールに委譲）
 - [x] 中断を実装する（0.7.0: Runs コンソールの Cancel）
 - [x] 再開を実装する（0.7.0: Sessions / `resume`、履歴を引き継いで同一カードで再開）
+- [x] 並列 run の俯瞰ビュー（Overview ボード）を実装する（KPI / Kanban / spec ポートフォリオ）
 - [ ] 自動リトライを実装する（現状は Re-run ボタンによる手動再実行のみ）
 
 ### Phase 4: L4（Kiro 型 IDE）
@@ -376,7 +377,34 @@ L3（自前オーケストレータ）の最初のスライスを 0.7.0 で実�
 - SDK スモーク: 通常実行 / `AskUserQuestion` 往復 / 権限承認往復 / `resume` の文脈引き継ぎ
 - Runs コンソールのレンダリング（ツール・表・質問カード・プレビュー・履歴）をヘッドレスブラウザで確認
 - v0.7.0 を GitHub Releases で配布
-- 設計ドキュメント `docs/`（日本語 6 ファイル）を追加
+- 設計ドキュメント `docs/`（日本語）を追加
+
+## Overview ボード（リーダー / PM 向け）
+
+複数のワーカー（人 / エージェント）が並行して動くとき、リーダーや PM が全体を
+1 画面で見るための **Overview** ボードを追加した。新しい状態ファイルは持たず、
+既存の Runs / Sessions / Specs を突き合わせる。
+
+- **KPI**: 対応待ち（pending + 承認待ち）、実行中、当日の失敗、タスク完了率、当日コスト
+- **Kanban**: `Needs you` / `Running` / `Done` / `Failed`。1 カード = 1 run または直近セッション
+- **Spec ポートフォリオ**: フェーズ、承認 3 段階、`tasks.md` 進捗、稼働数、次のアクション
+- **相関**: 同一 `sessionId` は run を優先。別ウィンドウはセッションのトランスクリプト末尾で
+  「作業中 / 質問待ち / 停止」を判定する（`system stop_hook_summary` 等の停止マーカーを利用）。
+  完了済みセッションはボードに出さない
+- **入口**: `cc-sdd: Open Overview`、Specs / Tasks / Sessions のタイトルバー、
+  Runs コンソールのヘッダー
+- **実装**: `core/overview.ts`（純粋集約）+ `ui/overviewPanel.ts`（Webview）+
+  `runsConsole.getRuns()` / `onDidChange`。テストは `test/overview.test.ts`
+
+制約:
+
+- ライブ状態はこのウィンドウの Runs コンソールが持つ。再起動で run 履歴は消える
+- 別ウィンドウの状態はトランスクリプト末尾からの推定。停止マーカーが無い古い形式では
+  assistant テキストの最終更新から 60 秒で停止扱いにする
+- pending への回答 / Cancel は run タブで行う（Overview からは open のみ）
+
+次の一手は **SF-1（実行の永続化）**。run 状態を `.kiro/runs/` に書き出せば、
+Overview は複数ウィンドウ / 再起動後も正確なワーカー状態を表示できる。
 
 ## ソフトウェアファクトリーとしての位置づけ（2026-11）
 

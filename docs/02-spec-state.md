@@ -43,6 +43,8 @@
 | `nextAction(spec)` | 次に行うこと: `Generate <phase>` / `Review and approve <phase>` / `Ready for implementation` |
 | `allApproved(spec)` | 3 フェーズすべて approved か |
 
+Overview ボードは `phaseStatus` と `approvals` から「承認待ちフェーズ」(`reviewPhases`)を求め、`Needs you` の承認カードとして表示します。承認操作そのものは Specs ツリー / ゲート検証を経由します。
+
 ## 承認ゲート(`core/validation.ts`)
 
 承認操作の直前に `validateArtifact(phase, content, language)` を実行します。
@@ -109,3 +111,8 @@
 ### StatusBar(`ui/statusBar.ts`)
 
 アクティブ spec の `feature_name` と次アクションを表示。クリックで `cc-sdd: Select Active Spec`。
+
+### OverviewStatusBar(`ui/overviewStatusBar.ts`)
+
+run が動いている間だけ `N waiting · M running` を表示。クリックで
+`cc-sdd: Open Overview`。`RunsConsole.onDidChange` のたびに更新します。

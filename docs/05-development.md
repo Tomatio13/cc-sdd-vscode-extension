@@ -11,7 +11,7 @@
 
 ```bash
 npm install
-npm test            # vitest(78 tests)
+npm test            # vitest(94 tests)
 npm run check       # 型チェック
 npm run package     # VSIX 作成
 ```
@@ -49,7 +49,9 @@ esbuild src/extension.ts --bundle --platform=node --format=cjs \
 ## テスト方針
 
 - `src/core/` は **vscode 非依存**の純粋ロジックなので、そのまま vitest でテスト
-  - `spec` / `tasks` / `validation` / `repository`(一時ディレクトリで FS を実際に使う)/ `sessions` / `roadmap`
+  - `spec` / `tasks` / `validation` / `repository`(一時ディレクトリで FS を実際に使う)/ `sessions` / `roadmap` / `overview`
+  - `overview` は run 状態の列分類、セッションの重複排除、承認カード、当日コストの集計を検証
+  - `sessions` はトランスクリプト末尾からの `activity` 判定(停止マーカー / `AskUserQuestion` / 60 秒フォールバック)も検証
 - `run/claudeRunner.ts` はイベント変換(`eventsFromClaudeLine`)・履歴変換・質問抽出・実行パス解決をテスト
 - Webview / Tree の見た目は自動テスト対象外。開発時は Webview の HTML を生成してヘッドレスブラウザで
   レンダリング確認(過去にレイアウト崩れ・エスケープ事故を検出)
@@ -57,7 +59,9 @@ esbuild src/extension.ts --bundle --platform=node --format=cjs \
 ## パッケージ
 
 - `.vscodeignore` で `src/` `test/` `*.ts` `node_modules/` などを除外
-- 成果物: `cc-sdd-vscode-<version>.vsix`(README / assets / schemas / media / out を含む)
+- 成果物: `cc-sdd-vscode-<version>.vsix`(README / assets / schemas / media / out / docs を含む)
+  - 0.8.1 時点: 22 files / 約 1.64 MB
+- README 用キャプチャは `assets/workbench.png`(全体)と `assets/overview.png`(Overview のクロップ)
 - `package.json` の `private: true` は Marketplace 公開を前提にしないため(GitHub Releases 配布)
 
 ## CI / リリース
@@ -78,9 +82,9 @@ esbuild src/extension.ts --bundle --platform=node --format=cjs \
 リリース手順:
 
 ```bash
-npm version minor        # 例: 0.7.0 → 0.8.0(package.json/lock を更新してコミット・タグ作成)
+npm version minor        # 例: 0.8.1 → 0.9.0(package.json/lock を更新してコミット・タグ作成)
 git push origin main
-git push origin v0.8.0   # これで Release まで自動
+git push origin v0.9.0   # これで Release まで自動
 ```
 
 ## 既知の落とし穴
@@ -93,6 +97,8 @@ git push origin v0.8.0   # これで Release まで自動
 | 権限 UI が出ない | `permissionMode: 'bypassPermissions'` では SDK が `canUseTool` を呼ばない(仕様) |
 | 実行ログが `session …` の連続になる | `system` イベントは `subtype === 'init'` 以外(hook 等)を無視する。init 判定を外すとノイズが溢れる |
 | 更新が重い | 履歴を `state` スナップショットに含めない。`history` は別メッセージで 1 回だけ送る。更新は 80ms で合流 |
+| Overview の Running が完了後も残る | セッションの mtime だけを見ると、`cost-state` 等のメタ行で更新されるため誤判定する。`readSessionTailInfo()` の `activity`(停止マーカー / `tool_use` / 60 秒フォールバック)を使う |
+| Overview が重い | セッション一覧は 5 秒キャッシュ。runs は `getRuns()` のスナップショット(`history` なし)。更新は 350ms デバウンス |
 | Sessions が空 | ワークスペースのパスと `~/.claude/projects/<encoded>` が一致しているか確認。`cwd` 不一致のセッションは意図的に除外 |
 | resume が高い | 履歴全体を送るため。プレビュー(課金なし)で確認してから再開する |
 
@@ -118,10 +124,25 @@ git push origin v0.8.0   # これで Release まで自動
 `RunsConsoleOptions.getPhaseActions()`(`src/extension.ts` 内)が返す `PhaseActions` を拡張し、
 `ui/runsConsole.ts` の `renderActions()` にボタンを追加します。
 
+### Overview の指標 / カードを増やす
+
+1. `core/overview.ts` の `OverviewModel` / `buildOverview()` に入力と集計を追加
+2. `test/overview.test.ts` に純粋ロジックのテストを追加
+3. `ui/overviewPanel.ts` の `renderKpi()` / `renderCard()` / `renderSpec()` に表示を追加
+4. クリック操作が必要なら Webview メッセージ(`OverviewMessage`)と `OverviewPanelOptions` を追加
+
+### README のキャプチャを更新する
+
+1. VS Code で Specs / Overview / Runs を並べた状態を撮る
+2. 全体を `assets/workbench.png`(1800px 幅程度)にリサイズ
+3. Overview パネルだけを `assets/overview.png`(1000px 幅程度)にクロップ
+4. `npm run package` で VSIX にも反映(README / assets は VSIX に含まれる)
+
 ## デバッグ
 
 - **Runs コンソール**: コマンド `cc-sdd: Show Runs Console` で再表示。Webview の DOM はコマンドパレットの
   `Developer: Open Webview Developer Tools` で調査可能
+- **Overview**: コマンド `cc-sdd: Open Overview`。表示が古い場合は `Refresh` を押すか、一度パネルを隠して再表示する(可視時のみ自動更新)
 - **CLI 自体の確認**: ターミナルで `claude -p "Reply OK" --output-format stream-json --verbose` を実行
 - **実行ログ**: `claude-console` の失敗はコンソールの `RUN FAILED` サマリに表示される
   (バイナリが見つからない場合は `ccSdd.claudePath` を確認)

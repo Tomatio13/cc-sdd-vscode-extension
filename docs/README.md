@@ -2,6 +2,7 @@
 
 このディレクトリは、`cc-sdd-vscode` 拡張機能の**現在の作り**を第三者が理解するための設計ドキュメントです。
 cc-sdd 自体の説明は [cc-sdd リポジトリ](https://github.com/gotalab/cc-sdd) を参照してください。
+内容は **0.8.1** 時点の実装に合わせています。
 
 ## これは何か
 
@@ -15,6 +16,7 @@ VS Code 上で cc-sdd の Spec-Driven Development を回すためのワークベ
   - 拡張内蔵の **Runs コンソール**(Claude Agent SDK 経由の headless 実行)
   - Copilot Chat / カスタムコマンド / クリップボード
 - 過去の Claude Code セッションを一覧・プレビュー・再開できる(**Sessions**)
+- 複数の run / セッション / spec を 1 画面で俯瞰できる(**Overview** ボード)
 
 「生成はエージェント、承認と状態遷移は拡張」が設計の中心です。
 
@@ -27,6 +29,7 @@ VS Code 上で cc-sdd の Spec-Driven Development を回すためのワークベ
 | 3 | [03-agents-and-runs.md](./03-agents-and-runs.md) | エージェント呼び出し、Claude Agent SDK ランナー、Runs コンソール(Webview) |
 | 4 | [04-sessions.md](./04-sessions.md) | Claude Code セッションの保存形式、一覧・絞り込み、プレビュー、再開 |
 | 5 | [05-development.md](./05-development.md) | ビルド/テスト/パッケージ/リリース、既知の落とし穴、拡張手順 |
+| 6 | [06-overview.md](./06-overview.md) | リーダー / PM 向け Overview ボード（KPI / Kanban / spec ポートフォリオ） |
 
 ## 全体像
 
@@ -35,6 +38,7 @@ flowchart LR
   subgraph VSCode["VS Code"]
     UI["Tree Views<br/>Specs / Tasks / Sessions"]
     CONSOLE["Runs Console<br/>(Webview)"]
+    OVERVIEW["Overview Board<br/>(Webview)"]
     EXT["extension.ts<br/>(composition root)"]
   end
 
@@ -44,6 +48,7 @@ flowchart LR
     VALID["validation.ts<br/>承認ゲート"]
     REPO["repository.ts<br/>FS 読み書き"]
     SESS["sessions.ts<br/>セッション読取"]
+    OV["overview.ts<br/>KPI / ボード集約"]
   end
 
   subgraph agent["エージェント"]
@@ -54,7 +59,11 @@ flowchart LR
 
   UI --> EXT
   CONSOLE <--> EXT
+  OVERVIEW <--> EXT
   EXT --> SPEC & TASKS & VALID & REPO & SESS
+  EXT --> OV
+  CONSOLE -.RunState.-> OV
+  SESS -.SessionRecord.-> OV
   EXT -->|runSkill| TERM
   EXT -->|コマンド / URI| PANEL
   EXT -->|RunsConsole| SDK
@@ -74,3 +83,4 @@ flowchart LR
 | agent | スキルを実行する外部ツール(Claude Code 等) |
 | run | Runs コンソール上の 1 回の headless 実行 |
 | session | Claude Code が `~/.claude/projects/` に保存する会話ログ |
+| overview | ライブ run / 作業中セッション / 承認待ち / spec 進捗をまとめたリーダー向けボード |

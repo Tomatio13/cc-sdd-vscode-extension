@@ -26,9 +26,12 @@ Claude Code はプロジェクトごとにセッションを保存します。
 2. `*.jsonl` を列挙し、各ファイルの mtime を取得
 3. **先頭 256KB まで**を読んで(`readSessionHead`)、最初の user テキストから
    - `cwd` / `timestamp` / `/skill feature` のタイトル / skill / feature を抽出
-4. **末尾 128KB** を読んで(`readSessionTail`)、最後のアシスタント発話を取得(ツールチップ用)
+4. **末尾 128KB** を読んで(`readSessionTailInfo`)、最後のアシスタント発話と
+   `activity`(running / waiting / stopped / unknown)を取得
 5. **`cwd` が現在のワークスペースと一致するものだけ**残す(末尾スラッシュは正規化)
 6. mtime の新しい順にソート
+
+`readSessionTail()` は `readSessionTailInfo()` の後方互換ラッパーで、最後のアシスタント発話だけを返します。
 
 タイトル抽出:
 
@@ -37,6 +40,27 @@ Claude Code はプロジェクトごとにセッションを保存します。
 - それも無ければ `Session <id 先頭8文字>`
 
 `formatWhen` で `just now` / `5m ago` / `3h ago` / `2d ago` / `YYYY-MM-DD` を表示します。
+
+## セッションの活動状態(`activity`)
+
+Sessions ビューは履歴一覧なので状態を持ちませんが、Overview は「別ウィンドウでまだ動いているか」を知る必要があります。そこで `readSessionTailInfo()` が JSONL の末尾を逆順に走査し、`SessionRecord.activity` を返します。
+
+| 末尾の内容 | `activity.state` | Overview での扱い |
+| --- | --- | --- |
+| assistant の `tool_use`(未完了) | `running` | `Running` / **Active elsewhere** |
+| 未回答の `AskUserQuestion` | `waiting` (`pending: 'question'`) | `Needs you` / **Question elsewhere** |
+| user の `tool_result` | `running` | `Running` |
+| assistant のテキスト + `system stop_hook_summary` / `turn_duration` | `stopped` | ボードに出さない |
+| `result` エントリ | `stopped` | ボードに出さない |
+| assistant のテキストのみ(停止マーカーなし) | 更新から 60 秒以内なら `running`、それ以降は `stopped` | 同上 |
+| 判定できる内容がない | `unknown` | ボードに出さない |
+
+補足:
+
+- **mtime だけでは判定しない**。完了後も `last-prompt` / `cost-state` などのメタ行が追記され、mtime は新しくなる
+- `stop_hook_summary` / `turn_duration` / `stop` を停止マーカーとして扱う
+- 停止マーカーが無い古い CLI 形式のためのフォールバックが 60 秒の猶予
+- Sessions ツリーは従来どおり全セッションを表示する。Overview だけが `activity` で絞り込む
 
 ## Sessions ビュー(`ui/sessionsTree.ts`)
 
@@ -107,6 +131,7 @@ claude --resume <session-id>
 ## 設計上の注意
 
 - **読み取り専用のプレビューは課金ゼロ**: SDK を起動しないためトークンを消費しません
+- **完了済みセッションは Overview に出ない**: Sessions には残るが、`activity` が `stopped` のためボード対象外
 - **再開は履歴を送る**ため、巨大セッションの resume はトークン消費が大きくなります(必要ならプレビューで内容を確認してから)
 - セッションの読み取りはローカルファイルのみ。ネットワーク送信はしません
 - マルチルートは他機能と同じく**先頭フォルダ**基準です
