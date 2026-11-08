@@ -2,7 +2,7 @@
   "name": "cc-sdd-vscode",
   "displayName": "cc-sdd Specs",
   "description": "Spec-Driven Development workbench for cc-sdd: spec explorer, approval gates, and task board for .kiro/specs.",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "publisher": "gotalab",
   "license": "MIT",
   "private": true,
@@ -172,6 +172,11 @@
         "icon": "$(console)"
       },
       {
+        "command": "ccSdd.overview",
+        "title": "cc-sdd: Open Overview",
+        "icon": "$(dashboard)"
+      },
+      {
         "command": "ccSdd.saveRunTrace",
         "title": "cc-sdd: Save Last Run Trace",
         "icon": "$(save-as)"
@@ -195,24 +200,29 @@
     "menus": {
       "view/title": [
         {
-          "command": "ccSdd.runDiscovery",
-          "when": "view == ccSdd.specs",
+          "command": "ccSdd.overview",
+          "when": "view == ccSdd.specs || view == ccSdd.tasks || view == ccSdd.sessions",
           "group": "navigation@0"
         },
         {
-          "command": "ccSdd.newSpec",
+          "command": "ccSdd.runDiscovery",
           "when": "view == ccSdd.specs",
           "group": "navigation@1"
         },
         {
-          "command": "ccSdd.install",
+          "command": "ccSdd.newSpec",
           "when": "view == ccSdd.specs",
           "group": "navigation@2"
         },
         {
+          "command": "ccSdd.install",
+          "when": "view == ccSdd.specs",
+          "group": "navigation@3"
+        },
+        {
           "command": "ccSdd.refresh",
           "when": "view == ccSdd.specs || view == ccSdd.tasks",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "ccSdd.refreshSessions",
