@@ -26,6 +26,7 @@ export interface RunsConsoleOptions {
   rerun: (skill: string, feature: string) => Promise<void>;
   resumeTerminal: (sessionId: string) => Promise<void>;
   getRunsDir: () => string | undefined;
+  openOverview?: () => void;
 }
 
 interface ConsoleMessage {
@@ -90,6 +91,10 @@ export class RunsConsole {
   private handles = new Map<string, ClaudeRunHandle>();
   private deliveredHistory = new Map<vscode.WebviewPanel, Set<string>>();
   private updateTimer?: NodeJS.Timeout;
+  private readonly changed = new vscode.EventEmitter<void>();
+
+  /** Fires when the run list or a run's state changes (coalesced with updates). */
+  readonly onDidChange = this.changed.event;
 
   constructor(private readonly options: RunsConsoleOptions) {}
 
@@ -217,6 +222,17 @@ export class RunsConsole {
     this.updateAll();
   }
 
+  /** Read-only view for the overview board (history is dropped). */
+  getRuns(): RunState[] {
+    return this.runs.map((run) => ({ ...run, history: undefined }));
+  }
+
+  /** Opens the single-run tab, creating it if needed. */
+  openRun(runId: string): void {
+    this.openRunTab(runId);
+    this.updateAll();
+  }
+
   /** Continues a finished run in place by resuming its Claude session. */
   private continueRun(run: RunState, instruction: string, permissionMode: string): void {
     if (!run.sessionId) {
@@ -296,6 +312,7 @@ export class RunsConsole {
       panel.dispose();
     }
     this.panels.clear();
+    this.changed.dispose();
   }
 
   private ensureMainPanel(): void {
@@ -395,6 +412,7 @@ export class RunsConsole {
       for (const panel of this.panels.keys()) {
         this.pushTo(panel);
       }
+      this.changed.fire();
     }, 80);
   }
 
@@ -432,6 +450,9 @@ export class RunsConsole {
       case 'clearFinished':
         this.runs = this.runs.filter((candidate) => candidate.status === 'running');
         this.updateAll();
+        return;
+      case 'overview':
+        this.options.openOverview?.();
         return;
       case 'copy':
         if (run) {
@@ -1359,10 +1380,11 @@ export class RunsConsole {
       let header = '<div class="app-header">';
       header += '<span class="app-title">cc-sdd Runs</span>';
       header += '<span class="app-hint">Headless Claude Code runs. Pick agent "claude-console" in settings.</span>';
+      header += '<span class="app-actions"><button class="secondary" data-act="overview">Overview</button>';
       if (runs.some(function (run) { return run.status !== 'running'; })) {
-        header += '<span class="app-actions"><button class="secondary" data-act="clearFinished">Clear finished</button></span>';
+        header += '<button class="secondary" data-act="clearFinished">Clear finished</button>';
       }
-      header += '</div>';
+      header += '</span></div>';
 
       if (!runs.length) {
         app.innerHTML = header + '<div class="app-hint">No runs yet. Start a phase from the cc-sdd tree.</div>';

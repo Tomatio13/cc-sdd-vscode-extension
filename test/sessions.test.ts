@@ -10,6 +10,7 @@ import {
   parseSessionText,
   readSessionHead,
   readSessionTail,
+  readSessionTailInfo,
   readSessionUsage,
   transcriptSegmentsFromLines,
 } from '../src/core/sessions';
@@ -168,6 +169,85 @@ describe('readSessionTail', () => {
 
   it('returns undefined for a missing file', () => {
     expect(readSessionTail('/no/such/file.jsonl')).toBeUndefined();
+  });
+});
+
+describe('readSessionTailInfo', () => {
+  const writeTranscript = (name: string, entries: unknown[], mtime: Date): string => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, `${name}.jsonl`);
+    fs.writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+    fs.utimesSync(filePath, mtime, mtime);
+    return filePath;
+  };
+
+  const assistant = (content: unknown[]): unknown => ({
+    type: 'assistant',
+    message: { role: 'assistant', content },
+  });
+
+  it('marks a transcript with a stop marker as stopped', () => {
+    const now = Date.parse('2026-11-08T12:00:00Z');
+    const filePath = writeTranscript(
+      'stopped',
+      [
+        { type: 'user', message: { content: [{ type: 'text', text: 'Run the tests' }] } },
+        assistant([{ type: 'text', text: '184 passed.' }]),
+        { type: 'system', subtype: 'stop_hook_summary' },
+        { type: 'last-prompt' },
+        { type: 'cost-state' },
+      ],
+      new Date(now - 1000),
+    );
+
+    const info = readSessionTailInfo(filePath, undefined, undefined, now);
+    expect(info.activity.state).toBe('stopped');
+    expect(info.lastMessage).toBe('184 passed.');
+  });
+
+  it('marks an unanswered AskUserQuestion as waiting', () => {
+    const now = Date.parse('2026-11-08T12:00:00Z');
+    const filePath = writeTranscript(
+      'waiting',
+      [
+        assistant([{ type: 'text', text: 'I need one detail.' }]),
+        assistant([{ type: 'tool_use', name: 'AskUserQuestion', input: { questions: [] } }]),
+        { type: 'last-prompt' },
+        { type: 'atis-latch' },
+      ],
+      new Date(now - 1000),
+    );
+
+    const info = readSessionTailInfo(filePath, undefined, undefined, now);
+    expect(info.activity).toEqual({ state: 'waiting', pending: 'question' });
+  });
+
+  it('keeps a recent transcript with an open tool call running', () => {
+    const now = Date.parse('2026-11-08T12:00:00Z');
+    const filePath = writeTranscript(
+      'running',
+      [
+        assistant([{ type: 'text', text: 'Checking the workspace.' }]),
+        assistant([{ type: 'tool_use', name: 'Bash', input: { command: 'pytest' } }]),
+        { type: 'last-prompt' },
+      ],
+      new Date(now - 1000),
+    );
+
+    const info = readSessionTailInfo(filePath, undefined, undefined, now);
+    expect(info.activity.state).toBe('running');
+  });
+
+  it('treats stale assistant text without a stop marker as stopped', () => {
+    const now = Date.parse('2026-11-08T12:00:00Z');
+    const filePath = writeTranscript(
+      'stale',
+      [assistant([{ type: 'text', text: 'Old output.' }])],
+      new Date(now - 5 * 60 * 1000),
+    );
+
+    const info = readSessionTailInfo(filePath, undefined, undefined, now);
+    expect(info.activity.state).toBe('stopped');
   });
 });
 

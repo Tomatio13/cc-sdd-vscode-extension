@@ -16,6 +16,7 @@ export interface SessionRecord {
   sizeBytes: number;
   filePath: string;
   lastMessage?: string;
+  activity?: SessionActivityInfo;
   usage?: TokenUsage;
   costUsd?: number;
   apiMs?: number;
@@ -177,10 +178,44 @@ export const readSessionHead = (filePath: string): SessionHead => {
   return head;
 };
 
-/** Reads the last assistant text from the tail of a transcript. */
-export const readSessionTail = (filePath: string, maxBytes = 128 * 1024): string | undefined => {
+export type SessionActivityState = 'running' | 'waiting' | 'stopped' | 'unknown';
+
+export interface SessionActivityInfo {
+  state: SessionActivityState;
+  /** Set when the session is blocked on an interactive question. */
+  pending?: 'question';
+}
+
+export interface SessionTailInfo {
+  lastMessage?: string;
+  activity: SessionActivityInfo;
+}
+
+const STOP_SUBTYPES = new Set(['stop_hook_summary', 'turn_duration', 'stop']);
+const STREAMING_GRACE_MS = 60_000;
+
+/**
+ * Reads the tail of a transcript and infers whether the session is still
+ * active. A recent mtime alone is not enough: a completed run keeps writing
+ * metadata (cost-state / last-prompt), and opening a preview does not mean
+ * work is in flight. Claude writes a `system` stop marker at the end of a
+ * turn, so the last content entry plus that marker is the signal we use.
+ */
+export const readSessionTailInfo = (
+  filePath: string,
+  mtimeMs?: number,
+  maxBytes = 128 * 1024,
+  now = Date.now(),
+): SessionTailInfo => {
+  let stat: fs.Stats;
   try {
-    const stat = fs.statSync(filePath);
+    stat = fs.statSync(filePath);
+  } catch {
+    return { activity: { state: 'unknown' } };
+  }
+  const updatedAt = mtimeMs ?? stat.mtimeMs;
+
+  try {
     const start = Math.max(0, stat.size - maxBytes);
     const fd = fs.openSync(filePath, 'r');
     try {
@@ -191,6 +226,12 @@ export const readSessionTail = (filePath: string, maxBytes = 128 * 1024): string
         const firstNewline = text.indexOf('\n');
         text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
       }
+
+      let lastMessage: string | undefined;
+      let activity: SessionActivityInfo = { state: 'unknown' };
+      let decided = false;
+      let sawStop = false;
+
       const lines = text.split('\n');
       for (let index = lines.length - 1; index >= 0; index -= 1) {
         const line = lines[index];
@@ -206,32 +247,108 @@ export const readSessionTail = (filePath: string, maxBytes = 128 * 1024): string
         if (typeof parsed !== 'object' || parsed === null) {
           continue;
         }
-        const entry = parsed as { type?: unknown; message?: { content?: unknown } };
-        if (entry.type !== 'assistant' || !Array.isArray(entry.message?.content)) {
+        const entry = parsed as {
+          type?: unknown;
+          subtype?: unknown;
+          message?: { content?: unknown };
+        };
+        const type = typeof entry.type === 'string' ? entry.type : '';
+
+        if (type === 'system') {
+          if (typeof entry.subtype === 'string' && STOP_SUBTYPES.has(entry.subtype)) {
+            sawStop = true;
+          }
           continue;
         }
-        const parts: string[] = [];
-        for (const block of entry.message.content) {
+        if (type === 'result') {
+          if (!decided) {
+            activity = { state: 'stopped' };
+            decided = true;
+          }
+          continue;
+        }
+        if (type !== 'assistant' && type !== 'user') {
+          continue;
+        }
+
+        const content = entry.message?.content;
+        const blocks = Array.isArray(content) ? content : [];
+        const textParts: string[] = [];
+        if (typeof content === 'string' && content.trim()) {
+          textParts.push(content.trim());
+        }
+        for (const block of blocks) {
           if (typeof block !== 'object' || block === null) {
             continue;
           }
           const typed = block as { type?: unknown; text?: unknown };
           if (typed.type === 'text' && typeof typed.text === 'string' && typed.text.trim()) {
-            parts.push(typed.text.trim());
+            textParts.push(typed.text.trim());
           }
         }
-        if (parts.length > 0) {
-          return parts.join(' ').replace(/\s+/g, ' ').slice(0, 300);
+
+        if (type === 'assistant' && lastMessage === undefined && textParts.length > 0) {
+          lastMessage = textParts.join(' ').replace(/\s+/g, ' ').slice(0, 300);
         }
+        if (decided) {
+          continue;
+        }
+
+        if (sawStop) {
+          activity = { state: 'stopped' };
+          decided = true;
+          continue;
+        }
+
+        if (type === 'user') {
+          const hasToolResult = blocks.some(
+            (block) =>
+              typeof block === 'object' &&
+              block !== null &&
+              (block as { type?: unknown }).type === 'tool_result',
+          );
+          activity = {
+            state: hasToolResult || textParts.length > 0 ? 'running' : 'unknown',
+          };
+          decided = true;
+          continue;
+        }
+
+        const toolUse = blocks.find(
+          (block) =>
+            typeof block === 'object' &&
+            block !== null &&
+            (block as { type?: unknown }).type === 'tool_use',
+        ) as { name?: unknown } | undefined;
+        if (toolUse) {
+          activity =
+            toolUse.name === 'AskUserQuestion'
+              ? { state: 'waiting', pending: 'question' }
+              : { state: 'running' };
+          decided = true;
+          continue;
+        }
+
+        // Assistant text without a stop marker is usually still streaming.
+        // After the grace period it is more likely an old/interrupted session.
+        activity = {
+          state: now - updatedAt < STREAMING_GRACE_MS ? 'running' : 'stopped',
+        };
+        decided = true;
       }
-      return undefined;
+
+      return { lastMessage, activity };
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    return undefined;
+    return { activity: { state: 'unknown' } };
   }
 };
+
+/** Reads only the last assistant text (kept for callers that don't need state). */
+export const readSessionTail = (filePath: string, maxBytes = 128 * 1024): string | undefined =>
+  readSessionTailInfo(filePath, undefined, maxBytes).lastMessage;
 
 const normalizePath = (value: string): string => value.replace(/[\\/]+$/, '');
 
@@ -469,6 +586,7 @@ export const listSessions = (
     }
     const id = entry.name.slice(0, -'.jsonl'.length);
     const usageInfo = readSessionUsage(filePath);
+    const tail = readSessionTailInfo(filePath, stat.mtimeMs);
     sessions.push({
       id,
       title: head.title?.trim() || `Session ${id.slice(0, 8)}`,
@@ -479,7 +597,8 @@ export const listSessions = (
       updatedAt: stat.mtimeMs,
       sizeBytes: stat.size,
       filePath,
-      lastMessage: readSessionTail(filePath),
+      lastMessage: tail.lastMessage,
+      activity: tail.activity,
       usage: usageInfo.usage,
       costUsd: usageInfo.costUsd,
       apiMs: usageInfo.apiMs,

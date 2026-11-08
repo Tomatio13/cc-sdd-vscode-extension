@@ -37,9 +37,12 @@ import {
 } from './launch/agentLauncher';
 import { SpecTreeProvider } from './ui/specTree';
 import { StatusBar } from './ui/statusBar';
+import { OverviewStatusBar } from './ui/overviewStatusBar';
 import { TaskTreeProvider } from './ui/taskTree';
 import { SessionsTreeProvider } from './ui/sessionsTree';
 import { RunsConsole, type PhaseActions } from './ui/runsConsole';
+import { OverviewPanel } from './ui/overviewPanel';
+import { buildOverview, emptyOverview } from './core/overview';
 import { resolveClaudeExecutable } from './run/claudeRunner';
 
 interface PhaseTarget {
@@ -116,10 +119,12 @@ const taskTarget = (value: unknown): TaskTarget | undefined => {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const statusBar = new StatusBar();
+  const overviewStatusBar = new OverviewStatusBar();
   let activeSpecId = context.workspaceState.get<string>('ccSdd.activeSpec');
   let watcher: vscode.FileSystemWatcher | undefined;
   let sessionsWatcher: vscode.FileSystemWatcher | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
+  let overviewPanel: OverviewPanel | undefined;
 
   const workspaceRoot = (): string | undefined =>
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -212,6 +217,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     taskProvider.setActive(active);
     statusBar.update(active);
     sessionsProvider.refresh();
+    overviewPanel?.scheduleRefresh(150);
 
     if (activeSpecId) {
       await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
@@ -601,6 +607,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     resumeTerminal: async (sessionId: string) => {
       resumeInTerminal(sessionId);
     },
+    openOverview: () => overviewPanel?.show(),
   });
 
   const sessionFromArg = (value: unknown): SessionRecord | undefined => {
@@ -743,6 +750,75 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await resumeInConsole(session.id, session.filePath, session.skill, session.feature);
   };
 
+  let overviewSessionCache: { at: number; sessions: SessionRecord[] } | undefined;
+
+  const loadOverview = async () => {
+    const root = workspaceRoot();
+    if (!root) {
+      return emptyOverview(Date.now());
+    }
+    const records = await loadSpecs();
+    const taskContents = await Promise.all(
+      records.map((record) => readArtifact(record, 'tasks')),
+    );
+    const now = Date.now();
+    if (!overviewSessionCache || now - overviewSessionCache.at > 5000) {
+      overviewSessionCache = { at: now, sessions: listSessions(root) };
+    }
+    return buildOverview({
+      specs: records.map((record, index) => ({ record, tasks: taskContents[index] })),
+      runs: runsConsole.getRuns(),
+      sessions: overviewSessionCache.sessions,
+      now,
+    });
+  };
+
+  overviewPanel = new OverviewPanel({
+    load: loadOverview,
+    openRun: (runId: string) => runsConsole.openRun(runId),
+    previewSession: async (sessionId: string) => {
+      const root = workspaceRoot();
+      if (!root) {
+        return;
+      }
+      const session = listSessions(root).find((candidate) => candidate.id === sessionId);
+      if (session) {
+        await previewSession(session);
+      }
+    },
+    openSpec: async (specId: string) => {
+      const record = (await loadSpecs()).find((candidate) => candidate.id === specId);
+      if (!record) {
+        return;
+      }
+      await selectSpec(record);
+      if (record.exists.tasks) {
+        await openFile(record.artifacts.tasks);
+      } else if (record.exists.requirements) {
+        await openFile(record.artifacts.requirements);
+      } else {
+        await openFile(record.specJsonPath);
+      }
+    },
+    openArtifact: async (specId: string, phase: string) => {
+      if (!isPhaseKey(phase)) {
+        return;
+      }
+      const record = (await loadSpecs()).find((candidate) => candidate.id === specId);
+      if (record) {
+        await openArtifact({ record, phase });
+      }
+    },
+    openRuns: () => runsConsole.show(),
+    runDiscovery: () => runDiscovery(),
+  });
+  context.subscriptions.push(
+    runsConsole.onDidChange(() => {
+      overviewStatusBar.update(runsConsole.getRuns());
+      overviewPanel?.scheduleRefresh();
+    }),
+  );
+
   const install = async (): Promise<void> => {
     const root = workspaceRoot();
     if (!root) {
@@ -859,6 +935,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerTreeDataProvider('ccSdd.tasks', taskProvider),
     vscode.window.registerTreeDataProvider('ccSdd.sessions', sessionsProvider),
     statusBar,
+    overviewStatusBar,
     register('ccSdd.refresh', refresh),
     register('ccSdd.pickSpec', pickSpec),
     register('ccSdd.showStatus', showStatus),
@@ -947,6 +1024,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     register('ccSdd.install', install),
+    register('ccSdd.overview', async () => {
+      overviewPanel?.show();
+    }),
     register('ccSdd.runs', async () => {
       runsConsole.show();
     }),
@@ -969,6 +1049,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      overviewSessionCache = undefined;
       setupWatcher();
       void refresh().catch(showError);
     }),
@@ -997,6 +1078,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         watcher?.dispose();
         sessionsWatcher?.dispose();
         runsConsole.dispose();
+        overviewPanel?.dispose();
       },
     },
   );
