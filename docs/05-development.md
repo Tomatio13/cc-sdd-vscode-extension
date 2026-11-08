@@ -144,5 +144,5 @@ git push origin v0.9.0   # これで Release まで自動
   `Developer: Open Webview Developer Tools` で調査可能
 - **Overview**: コマンド `cc-sdd: Open Overview`。表示が古い場合は `Refresh` を押すか、一度パネルを隠して再表示する(可視時のみ自動更新)
 - **CLI 自体の確認**: ターミナルで `claude -p "Reply OK" --output-format stream-json --verbose` を実行
-- **実行ログ**: `claude-console` の失敗はコンソールの `RUN FAILED` サマリに表示される
+- **実行ログ**: `claude-console` の失敗はコンソールの `Run failed` サマリに表示される
   (バイナリが見つからない場合は `ccSdd.claudePath` を確認)

@@ -12,6 +12,7 @@ import {
   type RunState,
   type TokenUsage,
 } from '../run/claudeRunner';
+import { webviewThemeCss } from './webviewTheme';
 
 export type { PhaseActions, PhaseActionTarget };
 
@@ -448,7 +449,9 @@ export class RunsConsole {
         this.pushHistoryTo(panel);
         return;
       case 'clearFinished':
-        this.runs = this.runs.filter((candidate) => candidate.status === 'running');
+        this.runs = this.runs.filter(
+          (candidate) => candidate.status === 'running' || candidate.status === 'preview',
+        );
         this.updateAll();
         return;
       case 'overview':
@@ -678,251 +681,345 @@ export class RunsConsole {
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <title>cc-sdd Runs</title>
   <style nonce="${nonce}">
+    ${webviewThemeCss}
+
+    /* Runs console: one neutral ramp, mono figures, calm surfaces. */
     :root {
-      color-scheme: light dark;
-      --cc-accent: var(--vscode-textLink-foreground, #4c9aff);
-      --cc-success: var(--vscode-testing-iconPassed, #4ade80);
-      --cc-error: var(--vscode-errorForeground, #f87171);
-      --cc-warn: var(--vscode-editorWarning-foreground, #fbbf24);
-      --cc-muted: var(--vscode-descriptionForeground, #9aa4b2);
-      --cc-fg: var(--vscode-foreground, #e6edf3);
-      --cc-border: var(--vscode-panel-border, rgba(148,163,184,.18));
-      --cc-surface: var(--vscode-editorWidget-background, rgba(148,163,184,.06));
-      --cc-surface-strong: var(--vscode-input-background, rgba(148,163,184,.12));
-      --cc-mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
-      --cc-radius: 10px;
+      --cc-ease: cubic-bezier(.2, 0, 0, 1);
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; padding: 14px 18px 18px;
+      margin: 0; padding: 0; height: 100vh; overflow: hidden;
       font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size, 13px);
-      color: var(--cc-fg);
-      background: var(--vscode-panel-background);
-      display: flex; flex-direction: column; height: 100vh;
+      font-size: 13px; line-height: 1.5;
+      color: var(--cc-fg); background: var(--cc-bg);
     }
-    .app-header { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex: none; }
-    .app-title { font-weight: 600; letter-spacing: .2px; }
-    .app-hint { color: var(--cc-muted); font-size: 12px; }
-    .app-actions { margin-left: auto; }
-    #app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    #app { height: 100vh; display: flex; flex-direction: column; }
 
-    button {
-      font-family: var(--vscode-font-family); font-size: 12px; font-weight: 500;
-      color: var(--vscode-button-foreground); background: var(--vscode-button-background);
-      border: 1px solid transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer;
-      transition: filter .12s ease, background .12s ease;
+    /* Header: page title, live counts, two quiet actions. */
+    .app-header {
+      flex: none; display: flex; align-items: center; gap: 12px;
+      min-height: 56px; padding: 0 20px;
+      border-bottom: 1px solid var(--cc-border); background: var(--cc-bg);
     }
-    button:hover { filter: brightness(1.12); }
-    button.secondary {
-      color: var(--vscode-button-secondaryForeground, var(--cc-fg));
-      background: transparent; border-color: var(--cc-border);
+    .app-title { font-size: 15px; font-weight: 600; letter-spacing: 0; }
+    .app-hint { font-size: 12px; color: var(--cc-muted); }
+    .app-counts {
+      display: flex; align-items: center; gap: 8px; margin-left: 4px;
+      font-family: var(--cc-mono); font-size: 11px;
+      color: var(--cc-muted); font-variant-numeric: tabular-nums;
     }
-    button.secondary:hover { background: var(--cc-surface-strong); }
+    .app-counts span + span::before {
+      content: "·"; margin-right: 8px; color: var(--cc-muted);
+    }
+    .app-counts .needs { color: var(--cc-accent-ink); }
+    .app-counts .running { color: var(--cc-warn-ink); }
+    .app-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .app-actions .text-button { min-height: 28px; padding: 0 8px; }
 
-    .run { border: 1px solid var(--cc-border); border-radius: var(--cc-radius); margin-bottom: 16px;
-      background: var(--vscode-editor-background); display: flex; flex-direction: column;
-      flex: none; overflow: hidden; }
-    .run.running { flex: 1 1 auto; min-height: 280px; }
-    .run.running .log { flex: 1 1 auto; max-height: none; min-height: 140px; }
-    .run.preview { flex: 1 1 auto; min-height: 280px; }
-    .run.preview .log { flex: 1 1 auto; max-height: none; min-height: 140px; }
+    /* Rolling list of runs. The single-run case fills the window. */
+    .runs {
+      flex: 1 1 auto; min-height: 0; overflow-y: auto;
+      padding: 20px; display: flex; flex-direction: column; gap: 16px;
+    }
+    .run {
+      position: relative; flex: none; display: flex; flex-direction: column;
+      border: 1px solid var(--cc-border); border-radius: var(--cc-radius-lg);
+      background: var(--cc-card); overflow: hidden;
+    }
+    .runs > .run:only-child { flex: 1 1 auto; min-height: 0; }
+    .runs > .run:only-child .log { flex: 1 1 auto; max-height: none; }
 
-    .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; flex-wrap: wrap;
-      background: var(--cc-surface); border-bottom: 1px solid var(--cc-border); }
-    .status-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
-    .status-dot.running { background: var(--cc-warn); animation: pulse 1.4s ease-in-out infinite; }
-    .status-dot.done { background: var(--cc-success); }
-    .status-dot.error { background: var(--cc-error); }
-    .status-dot.cancelled { background: var(--cc-muted); }
-    .status-dot.preview { background: var(--cc-accent); }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
-    .title { font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
-    .skilltag { font-family: var(--cc-mono); font-size: 11px; font-weight: 500;
-      color: var(--cc-muted); background: var(--cc-surface-strong);
-      border: 1px solid var(--cc-border); border-radius: 999px; padding: 1px 8px; }
-    .pill { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px;
-      padding: 2px 8px; border-radius: 999px; border: 1px solid var(--cc-border);
-      color: var(--cc-muted); background: var(--cc-surface-strong); }
-    .pill.running { color: var(--cc-warn);
-      border-color: color-mix(in srgb, var(--cc-warn) 45%, transparent);
-      background: color-mix(in srgb, var(--cc-warn) 10%, transparent); }
-    .pill.waiting { color: var(--cc-accent);
-      border-color: color-mix(in srgb, var(--cc-accent) 55%, transparent);
-      background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
-      animation: pulse 1.6s ease-in-out infinite; }
-    .pill.done { color: var(--cc-success);
-      border-color: color-mix(in srgb, var(--cc-success) 45%, transparent);
-      background: color-mix(in srgb, var(--cc-success) 10%, transparent); }
-    .pill.error { color: var(--cc-error);
-      border-color: color-mix(in srgb, var(--cc-error) 45%, transparent);
-      background: color-mix(in srgb, var(--cc-error) 10%, transparent); }
-    .pill.preview { color: var(--cc-accent);
-      border-color: color-mix(in srgb, var(--cc-accent) 45%, transparent);
-      background: color-mix(in srgb, var(--cc-accent) 10%, transparent); }
-    .mode { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
-    .elapsed { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
-    .usage { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
+    /* Run header */
+    .head {
+      flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      min-height: 44px; padding: 8px 12px 8px 16px;
+      border-bottom: 1px solid var(--cc-border); background: var(--cc-surface);
+    }
+    .title { font-size: 14px; font-weight: 500; line-height: 1.3; }
+    .skilltag { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
+    .status-text { font-size: 12px; font-weight: 500; color: var(--cc-muted); }
+    .status-text.attention, .status-text.preview { color: var(--cc-accent-ink); }
+    .status-text.running { color: var(--cc-warn-ink); }
+    .status-text.done { color: var(--cc-success-ink); }
+    .status-text.error { color: var(--cc-error-ink); }
+    .mode, .elapsed, .usage {
+      font-family: var(--cc-mono); font-size: 11px;
+      color: var(--cc-muted); font-variant-numeric: tabular-nums;
+    }
     .spacer { flex: 1; }
+    .head button { min-height: 26px; padding: 0 10px; }
+    .head .text-button { min-height: 26px; padding: 0 4px; }
 
-    .progress { height: 2px; background: var(--cc-surface-strong); overflow: hidden; flex: none; }
-    .progress span { display: block; height: 100%; width: 32%;
-      background: linear-gradient(90deg, transparent, var(--cc-accent), transparent);
-      animation: slide 1.6s linear infinite; }
-    @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
+    /* Live trace line above the log. Transform only, one easing curve. */
+    .progress {
+      flex: none; height: 2px; background: var(--cc-border);
+      position: relative; overflow: hidden;
+    }
+    .progress span {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 26%;
+      background: var(--cc-accent);
+      animation: trace 1.6s var(--cc-ease) infinite;
+    }
+    @keyframes trace {
+      from { transform: translateX(-110%); }
+      to { transform: translateX(490%); }
+    }
 
-    .log { margin: 0; padding: 12px 14px 8px; overflow-y: auto; max-height: 440px;
-      display: flex; flex-direction: column; gap: 6px;
-      font-size: 12.5px; line-height: 1.6; }
+    /* Log */
+    .log {
+      margin: 0; position: relative; flex: none;
+      padding: 12px 16px 16px;
+      display: flex; flex-direction: column; gap: 8px;
+      min-height: 120px; max-height: 380px; overflow-y: auto;
+      font-size: 13px; line-height: 1.65;
+    }
+    .runs > .run .log.resized { flex: none; max-height: none; }
+    .log-resize {
+      flex: none; width: 100%; height: 12px; min-height: 12px; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none; border-radius: 0;
+      cursor: ns-resize; touch-action: none;
+    }
+    .log-resize::before {
+      content: ""; width: 32px; height: 2px; border-radius: 1px;
+      background: var(--cc-border-strong);
+      box-shadow: 0 4px 0 var(--cc-border-strong);
+      transform: translateY(-2px);
+    }
+    .log-resize:hover { background: var(--cc-surface); }
+    .log-resize:hover::before, .log-resize:focus-visible::before {
+      background: var(--cc-muted);
+      box-shadow: 0 4px 0 var(--cc-muted);
+    }
+    .log-resize:focus-visible { outline: 1px solid var(--cc-accent); outline-offset: -1px; }
+    .log-resize:active { background: var(--cc-surface-strong); }
+    body.resizing, body.resizing * { cursor: ns-resize !important; user-select: none; }
+    .event.system {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--cc-muted); font-family: var(--cc-mono); font-size: 11px;
+    }
+    .event.toolresult {
+      font-family: var(--cc-mono); font-size: 11px;
+      color: var(--cc-muted); white-space: pre-wrap; word-break: break-word;
+    }
 
-    .event.system { display: flex; align-items: center; gap: 8px; color: var(--cc-muted);
-      font-family: var(--cc-mono); font-size: 11px; }
-    .event.system::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--cc-border); }
-
-    details.tool { border: 1px solid var(--cc-border); border-radius: 8px; background: var(--cc-surface); }
-    details.tool > summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-      cursor: pointer; list-style: none; }
+    details.tool { border-bottom: 1px solid var(--cc-border); }
+    details.tool:last-child { border-bottom: none; }
+    details.tool > summary {
+      display: flex; align-items: center; gap: 8px; min-height: 32px;
+      padding: 4px 0; cursor: pointer; list-style: none;
+    }
     details.tool > summary::-webkit-details-marker { display: none; }
-    details.tool > summary::before { content: "\\203a"; color: var(--cc-muted); font-weight: 600;
-      transition: transform .12s ease; flex: none; }
+    details.tool > summary::before {
+      content: "\\203a"; width: 10px; flex: none;
+      color: var(--cc-muted); font-weight: 600;
+      transition: transform .12s var(--cc-ease);
+    }
     details.tool[open] > summary::before { transform: rotate(90deg); }
     details.tool.no-body > summary { cursor: default; }
     details.tool.no-body > summary::before { display: none; }
-    .chip { font-family: var(--cc-mono); font-size: 10.5px; font-weight: 600;
-      padding: 1px 8px; border-radius: 999px; border: 1px solid var(--cc-border);
-      color: var(--cc-muted); background: var(--cc-surface-strong); flex: none; }
-    .chip.read { color: var(--cc-accent);
-      border-color: color-mix(in srgb, var(--cc-accent) 40%, transparent);
-      background: color-mix(in srgb, var(--cc-accent) 12%, transparent); }
-    .chip.write { color: var(--cc-warn);
-      border-color: color-mix(in srgb, var(--cc-warn) 40%, transparent);
-      background: color-mix(in srgb, var(--cc-warn) 12%, transparent); }
-    .chip.bash { color: var(--vscode-terminal-ansiMagenta, #c084fc);
-      border-color: color-mix(in srgb, var(--vscode-terminal-ansiMagenta, #c084fc) 40%, transparent);
-      background: color-mix(in srgb, var(--vscode-terminal-ansiMagenta, #c084fc) 12%, transparent); }
-    .chip.search { color: var(--vscode-charts-teal, #2dd4bf);
-      border-color: color-mix(in srgb, var(--vscode-charts-teal, #2dd4bf) 40%, transparent);
-      background: color-mix(in srgb, var(--vscode-charts-teal, #2dd4bf) 12%, transparent); }
-    .chip.agent { color: var(--cc-success);
-      border-color: color-mix(in srgb, var(--cc-success) 40%, transparent);
-      background: color-mix(in srgb, var(--cc-success) 12%, transparent); }
-    .chip.web { color: var(--vscode-charts-orange, #fb923c);
-      border-color: color-mix(in srgb, var(--vscode-charts-orange, #fb923c) 40%, transparent);
-      background: color-mix(in srgb, var(--vscode-charts-orange, #fb923c) 12%, transparent); }
-    .tool-summary { font-family: var(--cc-mono); font-size: 12px; color: var(--cc-fg);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-    .badge { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; flex: none; }
-    .badge.error { color: var(--cc-error); background: color-mix(in srgb, var(--cc-error) 14%, transparent); }
-    .tool-output { margin: 0; padding: 8px 12px 10px; border-top: 1px solid var(--cc-border);
-      font-family: var(--cc-mono); font-size: 11.5px; line-height: 1.5;
-      color: var(--cc-fg); white-space: pre-wrap; word-break: break-word;
-      max-height: 260px; overflow: auto; opacity: .9; }
 
+    .chip {
+      flex: none; width: 64px; overflow: hidden;
+      font-family: var(--cc-mono); font-size: 11px; font-weight: 500;
+      color: var(--cc-muted); white-space: nowrap; text-overflow: ellipsis;
+    }
+    .tool-summary {
+      flex: 1; min-width: 0; overflow: hidden;
+      font-family: var(--cc-mono); font-size: 12px; color: var(--cc-fg);
+      white-space: nowrap; text-overflow: ellipsis;
+    }
+    .badge { flex: none; font-family: var(--cc-mono); font-size: 11px; }
+    .badge.error { color: var(--cc-error-ink); }
+    .tool-output {
+      margin: 4px 0 12px; padding: 8px 12px; max-height: 240px; overflow: auto;
+      font-family: var(--cc-mono); font-size: 12px; line-height: 1.5;
+      color: var(--cc-fg); white-space: pre-wrap; word-break: break-word;
+      background: var(--cc-surface); border: 1px solid var(--cc-border);
+      border-radius: var(--cc-radius-sm);
+    }
+
+    /* Prose and history */
     .prose { color: var(--cc-fg); font-size: 13px; line-height: 1.65; }
-    .prose p { margin: 2px 0 8px; }
-    .prose h1, .prose h2, .prose h3, .prose h4 { margin: 12px 0 6px; font-weight: 600; line-height: 1.35; }
-    .prose h1 { font-size: 17px; } .prose h2 { font-size: 15px; }
+    .prose p { margin: 0 0 8px; }
+    .prose h1, .prose h2, .prose h3, .prose h4 {
+      margin: 12px 0 6px; font-weight: 600; line-height: 1.35;
+    }
+    .prose h1 { font-size: 16px; } .prose h2 { font-size: 15px; }
     .prose h3 { font-size: 14px; } .prose h4 { font-size: 13px; }
     .prose ul, .prose ol { margin: 4px 0 8px 20px; padding: 0; }
     .prose li { margin: 2px 0; }
-    .prose code { font-family: var(--cc-mono); font-size: 12px;
+    .prose code {
+      font-family: var(--cc-mono); font-size: 12px;
       background: var(--cc-surface-strong); border: 1px solid var(--cc-border);
-      border-radius: 4px; padding: 0 4px; }
-    .prose pre.code { margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px;
+      border-radius: 4px; padding: 0 4px;
+    }
+    .prose pre.code {
+      margin: 6px 0 10px; padding: 10px 12px; border-radius: var(--cc-radius-sm);
       background: var(--vscode-textCodeBlock-background, var(--cc-surface));
       border: 1px solid var(--cc-border); overflow: auto; max-height: 320px;
-      font-family: var(--cc-mono); font-size: 12px; line-height: 1.5; }
+      font-family: var(--cc-mono); font-size: 12px; line-height: 1.5;
+    }
     .prose pre.code code { background: none; border: none; padding: 0; font-size: inherit; }
     .prose strong { font-weight: 600; }
     .prose table { border-collapse: collapse; margin: 6px 0 10px; font-size: 12px; }
-    .prose th, .prose td { border: 1px solid var(--cc-border); padding: 4px 10px; text-align: left; vertical-align: top; }
+    .prose th, .prose td {
+      border: 1px solid var(--cc-border); padding: 4px 10px;
+      text-align: left; vertical-align: top;
+    }
     .prose th { background: var(--cc-surface-strong); font-weight: 600; }
 
-    .history { border: 1px solid var(--cc-border); border-radius: 8px;
-      background: var(--cc-surface); margin-bottom: 6px; }
-    .history > summary { cursor: pointer; padding: 8px 12px; list-style: none;
-      font-size: 11.5px; font-weight: 600; color: var(--cc-muted); }
+    .history {
+      border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm);
+      background: var(--cc-surface);
+    }
+    .history > summary {
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer; padding: 8px 12px; list-style: none;
+      font-size: 12px; font-weight: 500; color: var(--cc-muted);
+    }
     .history > summary::-webkit-details-marker { display: none; }
+    .history > summary::before {
+      content: "\\203a"; width: 10px; flex: none;
+      transition: transform .12s var(--cc-ease);
+    }
+    .history[open] > summary::before { transform: rotate(90deg); }
     .history[open] > summary { border-bottom: 1px solid var(--cc-border); }
-    .history-body { padding: 10px 12px 4px; display: flex; flex-direction: column; gap: 6px; }
+    .history-body {
+      position: relative; padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
 
     .event.user { display: flex; gap: 8px; align-items: flex-start; }
-    .user-badge { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .4px;
-      text-transform: uppercase; color: var(--cc-accent);
-      border: 1px solid color-mix(in srgb, var(--cc-accent) 45%, transparent);
-      background: color-mix(in srgb, var(--cc-accent) 10%, transparent);
-      border-radius: 999px; padding: 1px 8px; margin-top: 2px; }
+    .user-badge {
+      flex: none; width: 36px; margin-top: 2px;
+      font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted);
+    }
     .event.user .prose { flex: 1; min-width: 0; }
 
-    .errorline { color: var(--cc-error); font-family: var(--cc-mono); font-size: 12px;
-      background: color-mix(in srgb, var(--cc-error) 8%, transparent);
-      border: 1px solid color-mix(in srgb, var(--cc-error) 35%, transparent);
-      border-radius: 8px; padding: 6px 10px; white-space: pre-wrap; word-break: break-word; }
+    .errorline {
+      color: var(--cc-error-ink); font-family: var(--cc-mono); font-size: 12px;
+      background: color-mix(in srgb, var(--cc-error) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--cc-error) 30%, transparent);
+      border-radius: var(--cc-radius-sm); padding: 6px 10px;
+      white-space: pre-wrap; word-break: break-word;
+    }
 
-    .pending { margin: 10px 14px 12px; padding: 12px 14px; border-radius: 10px;
-      border: 1px solid color-mix(in srgb, var(--cc-accent) 55%, transparent);
-      background: color-mix(in srgb, var(--cc-accent) 8%, transparent); }
-    .pending-kind { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px;
-      color: var(--cc-accent); margin-bottom: 6px; }
-    .pending-title { font-weight: 600; margin-bottom: 4px; }
-    .pending-detail { font-family: var(--cc-mono); font-size: 12px; color: var(--cc-muted);
-      white-space: pre-wrap; word-break: break-word; margin-bottom: 10px; }
-    .pending-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    /* The one surface that asks for a decision. */
+    .pending {
+      margin: 0 16px 16px; padding: 12px 16px;
+      border: 1px solid var(--cc-border);
+      border-left: 2px solid var(--cc-accent);
+      border-radius: var(--cc-radius); background: var(--cc-surface);
+    }
+    .pending-kind {
+      margin-bottom: 6px; font-size: 12px; font-weight: 500;
+      color: var(--cc-accent-ink);
+    }
+    .pending-title { margin-bottom: 6px; font-size: 14px; font-weight: 600; }
+    .pending-detail {
+      margin-bottom: 12px; font-family: var(--cc-mono); font-size: 12px;
+      color: var(--cc-muted); white-space: pre-wrap; word-break: break-word;
+    }
+    .pending-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .question { margin-bottom: 12px; }
-    .question:last-of-type { margin-bottom: 6px; }
-    .option { display: block; width: 100%; text-align: left; margin: 5px 0; padding: 8px 12px;
-      background: var(--cc-surface); color: var(--cc-fg);
-      border: 1px solid var(--cc-border); border-radius: 8px; cursor: pointer;
-      font-family: var(--vscode-font-family); font-size: 12.5px; }
-    .option:hover { border-color: var(--cc-accent); }
-    .option.selected { border-color: var(--cc-accent);
-      box-shadow: 0 0 0 1px var(--cc-accent) inset; }
-    .option .optdesc { display: block; margin-top: 3px; font-size: 11.5px; color: var(--cc-muted); }
-    .options-hint { font-size: 11px; color: var(--cc-muted); }
+    .question:last-of-type { margin-bottom: 8px; }
+    .option {
+      display: block; width: 100%; text-align: left; margin: 4px 0; padding: 8px 12px;
+      background: var(--cc-card); color: var(--cc-fg);
+      border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm);
+      cursor: pointer; font-family: var(--vscode-font-family); font-size: 13px;
+    }
+    .option:hover { background: var(--cc-surface-strong); border-color: var(--cc-border-strong); }
+    .option.selected {
+      border-color: var(--cc-accent);
+      background: color-mix(in srgb, var(--cc-accent) 7%, transparent);
+    }
+    .option .optdesc { display: block; margin-top: 2px; font-size: 12px; color: var(--cc-muted); }
+    .options-hint { font-size: 12px; color: var(--cc-muted); }
 
-    .summary { margin: 12px 14px 14px; border-radius: 10px; border: 1px solid var(--cc-border);
-      background: var(--cc-surface); padding: 12px 14px; }
-    .summary.is-error { border-color: color-mix(in srgb, var(--cc-error) 45%, transparent); }
-    .summary-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px;
-      color: var(--cc-muted); margin-bottom: 6px; }
-    .summary.is-error .summary-label { color: var(--cc-error); }
+    /* Session usage: a quiet status bar, not a card. */
+    .usage-bar {
+      display: flex; align-items: baseline; flex-wrap: wrap;
+      gap: 4px 12px; padding: 8px 16px;
+      border-top: 1px solid var(--cc-border);
+      font-family: var(--cc-mono); font-size: 11px;
+      color: var(--cc-muted); font-variant-numeric: tabular-nums;
+    }
+    .usage-label { color: var(--cc-muted); }
+    .usage-bar .stat { white-space: nowrap; }
+
+    /* Finished-run receipt */
+    .summary {
+      margin: 0 16px 16px; padding: 12px 16px;
+      border: 1px solid var(--cc-border); border-radius: var(--cc-radius);
+      background: var(--cc-surface);
+    }
+    .summary.is-error { border-color: color-mix(in srgb, var(--cc-error) 30%, transparent); }
+    .summary-label {
+      margin-bottom: 6px; font-size: 12px; font-weight: 500;
+      color: var(--cc-muted);
+    }
+    .summary.is-error .summary-label { color: var(--cc-error-ink); }
     .summary-text { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
-    .stats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-    .summary-actions { display: flex; gap: 6px; margin-top: 10px; }
-    .stat-chip { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted);
-      background: var(--cc-surface-strong); border: 1px solid var(--cc-border);
-      border-radius: 999px; padding: 1px 8px; }
+    .stats {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+      margin-top: 10px; font-family: var(--cc-mono); font-size: 11px;
+      color: var(--cc-muted); font-variant-numeric: tabular-nums;
+    }
+    .summary-actions { margin-top: 12px; }
 
-    .metrics { margin: 10px 14px 0; border: 1px solid var(--cc-border); border-radius: 8px;
-      background: var(--cc-surface); }
-    .metrics > summary { cursor: pointer; padding: 8px 12px; list-style: none;
-      font-size: 11.5px; font-weight: 600; color: var(--cc-muted); }
+    .metrics {
+      margin: 0 16px 12px; border: 1px solid var(--cc-border);
+      border-radius: var(--cc-radius-sm); background: var(--cc-surface);
+    }
+    .metrics > summary {
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer; padding: 8px 12px; list-style: none;
+      font-size: 12px; font-weight: 500; color: var(--cc-muted);
+    }
     .metrics > summary::-webkit-details-marker { display: none; }
+    .metrics > summary::before {
+      content: "\\203a"; width: 10px; flex: none;
+      transition: transform .12s var(--cc-ease);
+    }
+    .metrics[open] > summary::before { transform: rotate(90deg); }
     .metrics[open] > summary { border-bottom: 1px solid var(--cc-border); }
-    .metrics-body { padding: 8px 12px 10px; overflow-x: auto; }
-    .metrics table { border-collapse: collapse; width: 100%;
-      font-family: var(--cc-mono); font-size: 11px; }
-    .metrics th, .metrics td { border-bottom: 1px solid var(--cc-border); padding: 3px 8px;
-      text-align: right; white-space: nowrap; }
+    .metrics-body { padding: 4px 12px 8px; overflow-x: auto; }
+    .metrics table {
+      width: 100%; border-collapse: collapse;
+      font-family: var(--cc-mono); font-size: 11px; font-variant-numeric: tabular-nums;
+    }
+    .metrics th, .metrics td {
+      padding: 4px 8px; border-bottom: 1px solid var(--cc-border);
+      text-align: right; white-space: nowrap;
+    }
     .metrics th:first-child, .metrics td:first-child,
     .metrics th:nth-child(2), .metrics td:nth-child(2) { text-align: left; }
-    .metrics th { color: var(--cc-muted); font-weight: 600; }
+    .metrics th { color: var(--cc-muted); font-weight: 500; }
+    .metrics tr:last-child td { border-bottom: none; }
 
-    .button-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 14px;
-      border-top: 1px solid var(--cc-border); background: var(--cc-surface); }
+    .button-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 16px; }
 
-    .resume-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-      padding: 10px 14px; border-top: 1px solid var(--cc-border); background: var(--cc-surface); }
-    .resume-input { flex: 1 1 320px; min-width: 200px; outline: none;
-      font-family: var(--vscode-font-family); font-size: 12.5px;
-      color: var(--vscode-input-foreground, var(--cc-fg));
-      background: var(--vscode-input-background, var(--cc-surface-strong));
-      border: 1px solid var(--cc-border); border-radius: 6px; padding: 6px 10px; }
-    .resume-input:focus { border-color: var(--cc-accent); }
-    .resume-mode { font-family: var(--cc-mono); font-size: 11.5px;
-      color: var(--vscode-dropdown-foreground, var(--cc-fg));
-      background: var(--vscode-dropdown-background, var(--cc-surface-strong));
-      border: 1px solid var(--cc-border); border-radius: 6px; padding: 6px 8px; }
+    .resume-bar {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      padding: 12px 16px; border-top: 1px solid var(--cc-border);
+      background: var(--cc-surface);
+    }
+    .resume-input { flex: 1 1 320px; min-width: 180px; }
+    .resume-mode { flex: none; }
+
+    @media (max-width: 720px) {
+      .app-header { padding: 0 16px; }
+      .app-hint, .app-counts { display: none; }
+      .runs { padding: 12px; gap: 12px; }
+      .mode, .usage { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .progress span { animation: none; width: 100%; opacity: .25; }
+    }
   </style>
 </head>
 <body>
@@ -952,6 +1049,12 @@ export class RunsConsole {
       return '<button ' + attrs + (secondary ? ' class="secondary"' : '') + '>' + esc(label) + '</button>';
     }
 
+    function textButton(act, runId, label, phase) {
+      const attrs = 'data-act="' + esc(act) + '" data-run="' + esc(runId) + '"' +
+        (phase ? ' data-phase="' + esc(phase) + '"' : '');
+      return '<button class="text-button" ' + attrs + '>' + esc(label) + '</button>';
+    }
+
     function rawButton(runId, act, label, attrs, secondary) {
       let extra = '';
       const data = attrs || {};
@@ -960,17 +1063,6 @@ export class RunsConsole {
       });
       return '<button data-act="' + esc(act) + '" data-run="' + esc(runId) + '"' + extra +
         (secondary ? ' class="secondary"' : '') + '>' + esc(label) + '</button>';
-    }
-
-    function classify(name) {
-      const lower = String(name || '').toLowerCase();
-      if (lower === 'bash' || lower === 'powershell') return 'bash';
-      if (lower === 'read') return 'read';
-      if (lower === 'edit' || lower === 'write' || lower === 'notebookedit') return 'write';
-      if (lower === 'grep' || lower === 'glob' || lower === 'ls') return 'search';
-      if (lower === 'task' || lower === 'agent' || lower === 'workflow') return 'agent';
-      if (lower.indexOf('web') === 0) return 'web';
-      return 'other';
     }
 
     function inline(text) {
@@ -1104,10 +1196,9 @@ export class RunsConsole {
         } else if (item.type === 'system') {
           html += '<div class="event system">' + esc(item.text) + '</div>';
         } else if (item.type === 'tool') {
-          const kind = classify(item.name);
           const hasBody = item.result !== '' && item.result.trim() !== '';
           html += '<details class="event tool' + (hasBody ? '' : ' no-body') + '">';
-          html += '<summary><span class="chip ' + kind + '">' + esc(item.name) + '</span>';
+          html += '<summary><span class="chip" title="' + esc(item.name) + '">' + esc(item.name) + '</span>';
           html += '<span class="tool-summary">' + esc(item.summary) + '</span>';
           if (item.isError) html += '<span class="badge error">error</span>';
           html += '</summary>';
@@ -1122,25 +1213,34 @@ export class RunsConsole {
       return html;
     }
 
+    function statusLabel(status) {
+      if (status === 'error') return 'Failed';
+      if (status === 'done') return 'Done';
+      if (status === 'cancelled') return 'Cancelled';
+      if (status === 'preview') return 'Preview';
+      return 'Running';
+    }
+
     function renderHead(run) {
       const running = run.status === 'running';
       const preview = run.status === 'preview';
       const pending = !!run.pending;
-      const label = pending ? 'waiting for you' : run.status;
+      const tone = pending ? 'attention' : run.status;
+      const label = pending ? 'Needs you' : statusLabel(run.status);
       const duration = running || preview
         ? ''
         : fmtDuration((run.endedAt || Date.now()) - run.startedAt);
 
       let html = '<div class="head">';
-      html += '<span class="status-dot ' + esc(run.status) + '"></span>';
-      html += '<span class="title">' + esc(run.feature || run.skill) +
-        ' <span class="skilltag">/' + esc(run.skill) + '</span></span>';
-      html += '<span class="pill ' + (pending ? 'waiting' : esc(run.status)) + '">' + esc(label) + '</span>';
-      html += '<span class="mode">' + esc(run.permissionMode) + '</span>';
+      html += '<span class="lamp ' + esc(tone) + '"></span>';
+      html += '<span class="title">' + esc(run.feature || run.skill) + '</span>';
+      html += '<span class="skilltag">/' + esc(run.skill) + '</span>';
+      html += '<span class="status-text ' + esc(tone) + '">' + esc(label) + '</span>';
+      html += '<span class="mode" title="Permission mode">' + esc(run.permissionMode) + '</span>';
       const usage = (run.summary && run.summary.usage) || run.usage;
       if (usage && (usage.inputTokens || usage.outputTokens || usage.cacheReadTokens)) {
-        html += '<span class="usage" title="tokens: input / output / cache read / cache write">↑' +
-          fmtTokens(usage.inputTokens) + ' ↓' + fmtTokens(usage.outputTokens) + '</span>';
+        html += '<span class="usage" title="Tokens in and out">' +
+          fmtTokens(usage.inputTokens) + ' in · ' + fmtTokens(usage.outputTokens) + ' out</span>';
       }
       if (running) {
         html += '<span class="elapsed" data-start="' + run.startedAt + '">' +
@@ -1150,18 +1250,18 @@ export class RunsConsole {
       }
       html += '<span class="spacer"></span>';
       if (preview) {
-        html += button('trace', run.id, 'Trace', true);
-        html += button('close', run.id, 'Close', true);
+        html += textButton('trace', run.id, 'Trace');
+        html += textButton('close', run.id, 'Close');
       } else {
-        if (running) html += button('popout', run.id, 'New tab', true);
-        html += button('copy', run.id, 'Copy prompt', true);
+        if (running) html += textButton('popout', run.id, 'Open tab');
+        html += textButton('copy', run.id, 'Copy prompt');
         if (running) {
-          html += button('trace', run.id, 'Trace', true);
-          html += button('cancel', run.id, 'Cancel');
+          html += textButton('trace', run.id, 'Trace');
+          html += button('cancel', run.id, 'Cancel', true);
         } else {
           html += button('rerun', run.id, 'Re-run', true);
-          html += button('trace', run.id, 'Trace', true);
-          html += button('close', run.id, 'Close', true);
+          html += textButton('trace', run.id, 'Trace');
+          html += textButton('close', run.id, 'Close');
         }
       }
       html += '</div>';
@@ -1178,9 +1278,9 @@ export class RunsConsole {
       });
       return '<div class="resume-bar">' +
         '<input class="resume-input" data-run="' + esc(run.id) +
-        '" placeholder="Message to continue (leave empty to just continue)" />' +
+        '" placeholder="Message to continue" />' +
         '<select class="resume-mode" data-run="' + esc(run.id) + '">' + options + '</select>' +
-        '<button data-act="resumeConsole" data-run="' + esc(run.id) + '">Resume in console</button>' +
+        '<button class="secondary" data-act="resumeConsole" data-run="' + esc(run.id) + '">Resume in console</button>' +
         '<button class="secondary" data-act="resumeTerminal" data-run="' + esc(run.id) + '">Terminal</button>' +
         '</div>';
     }
@@ -1195,16 +1295,16 @@ export class RunsConsole {
       });
       return '<div class="resume-bar">' +
         '<input class="resume-input continue-input" data-run="' + esc(run.id) +
-        '" placeholder="Message to continue this session (Enter to send)" />' +
+        '" placeholder="Message to continue" />' +
         '<select class="resume-mode" data-run="' + esc(run.id) + '">' + options + '</select>' +
-        '<button data-act="continue" data-run="' + esc(run.id) + '">Send</button>' +
+        '<button class="secondary" data-act="continue" data-run="' + esc(run.id) + '">Send</button>' +
         '</div>';
     }
 
     function renderPending(run, pending) {
       if (pending.kind === 'permission') {
         let html = '<div class="pending">';
-        html += '<div class="pending-kind">permission required</div>';
+        html += '<div class="pending-kind">Permission required</div>';
         html += '<div class="pending-title">Allow ' + esc(pending.toolName || 'tool') + '?</div>';
         if (pending.summary) html += '<div class="pending-detail">' + esc(pending.summary) + '</div>';
         html += '<div class="pending-actions">';
@@ -1217,7 +1317,7 @@ export class RunsConsole {
 
       const questions = pending.questions || [];
       let html = '<div class="pending">';
-      html += '<div class="pending-kind">question</div>';
+      html += '<div class="pending-kind">Question</div>';
       questions.forEach(function (question, index) {
         html += '<div class="question">';
         html += '<div class="pending-title">' + esc((question.header ? question.header + ' — ' : '') + question.question) + '</div>';
@@ -1231,7 +1331,7 @@ export class RunsConsole {
         html += '</div>';
       });
       if (questions.length > 1) {
-        html += '<div class="options-hint">Answer every question to continue.</div>';
+        html += '<div class="options-hint">Answer every question to continue</div>';
       }
       html += '</div>';
       return html;
@@ -1252,7 +1352,7 @@ export class RunsConsole {
       }).join('');
       return '<details class="metrics"><summary>Token usage · ' + turns.length + ' turns</summary>' +
         '<div class="metrics-body"><table><thead><tr>' +
-        '<th>#</th><th>model</th><th>in</th><th>out</th><th>cache R</th><th>cache W</th><th>Δt</th>' +
+        '<th>#</th><th>Model</th><th>In</th><th>Out</th><th>Cache read</th><th>Cache write</th><th>Gap</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div></details>';
     }
 
@@ -1264,10 +1364,10 @@ export class RunsConsole {
         : run.usageCostUsd;
       const stats = [];
       if (usage) {
-        stats.push('↑' + fmtTokens(usage.inputTokens));
-        stats.push('↓' + fmtTokens(usage.outputTokens));
-        if (usage.cacheReadTokens) stats.push('cache R ' + fmtTokens(usage.cacheReadTokens));
-        if (usage.cacheCreationTokens) stats.push('cache W ' + fmtTokens(usage.cacheCreationTokens));
+        stats.push(fmtTokens(usage.inputTokens) + ' in');
+        stats.push(fmtTokens(usage.outputTokens) + ' out');
+        if (usage.cacheReadTokens) stats.push(fmtTokens(usage.cacheReadTokens) + ' cache read');
+        if (usage.cacheCreationTokens) stats.push(fmtTokens(usage.cacheCreationTokens) + ' cache write');
       }
       if (typeof costUsd === 'number') stats.push(fmtCost(costUsd));
       if (summary && summary.turns) stats.push(summary.turns + ' turns');
@@ -1280,21 +1380,27 @@ export class RunsConsole {
       const text = summary && summary.text ? summary.text : '';
       if (!text && stats.length === 0) return '';
 
-      const label = run.status === 'preview'
-        ? 'session usage'
-        : (summary && summary.isError ? 'run failed' : 'run finished');
-      let html = '<div class="summary' + (summary && summary.isError ? ' is-error' : '') + '">';
+      if (run.status === 'preview') {
+        return '<div class="usage-bar"><span class="usage-label">Session usage</span>' +
+          stats.map(function (stat) {
+            return '<span class="stat">' + esc(stat) + '</span>';
+          }).join('') + '</div>';
+      }
+
+      const failed = (summary && summary.isError) || run.status === 'error';
+      const label = run.status === 'cancelled'
+        ? 'Run cancelled'
+        : (failed ? 'Run failed' : 'Run finished');
+      let html = '<div class="summary' + (failed ? ' is-error' : '') + '">';
       html += '<div class="summary-label">' + label + '</div>';
       if (text) html += '<div class="summary-text">' + esc(text) + '</div>';
       if (stats.length) {
         html += '<div class="stats">' + stats.map(function (stat) {
-          return '<span class="stat-chip">' + esc(stat) + '</span>';
+          return '<span class="stat">' + esc(stat) + '</span>';
         }).join('') + '</div>';
       }
-      if (run.status !== 'preview') {
-        html += '<div class="summary-actions">' +
-          button('trace', run.id, 'Save trace', true) + '</div>';
-      }
+      html += '<div class="summary-actions">' +
+        textButton('trace', run.id, 'Save trace') + '</div>';
       html += '</div>';
       return html;
     }
@@ -1314,12 +1420,17 @@ export class RunsConsole {
       return html;
     }
 
+    const logHeights = {};
+
     function renderRun(run) {
       const running = run.status === 'running';
+      const logHeight = logHeights[run.id];
       let html = '<div class="run ' + (running ? 'running' : esc(run.status)) + '" id="' + esc(run.id) + '">';
       html += renderHead(run);
       if (running) html += '<div class="progress"><span></span></div>';
-      html += '<div class="log">' + renderHistory(run) + renderItems(buildItems(run.segments)) + '</div>';
+      html += '<div class="log' + (logHeight ? ' resized' : '') + '"' +
+        (logHeight ? ' style="height:' + logHeight + 'px"' : '') + '>' +
+        renderHistory(run) + renderItems(buildItems(run.segments)) + '</div>';
       if (run.status === 'preview') html += renderResumeBar(run);
       if (run.pending) html += renderPending(run, run.pending);
       if (!running) {
@@ -1330,6 +1441,9 @@ export class RunsConsole {
       if (!running && run.status !== 'preview' && run.sessionId) {
         html += renderContinueBar(run);
       }
+      html += '<button type="button" class="log-resize" data-run="' + esc(run.id) +
+        '" title="Drag to resize · Double-click to reset" aria-label="Resize log for ' +
+        esc(run.feature || run.skill) + '"></button>';
       html += '</div>';
       return html;
     }
@@ -1353,18 +1467,36 @@ export class RunsConsole {
         body = '<div class="history-body">' + historyHtmlCache[key] + '</div>';
       }
       return '<details class="history" data-history-for="' + esc(run.id) + '"' + (open ? ' open' : '') + '>' +
-        '<summary>Session history · ' + segments.length + ' entries' +
-        (open ? '' : ' — click to expand') + '</summary>' + body + '</details>';
+        '<summary>Session history · ' + segments.length + ' entries</summary>' + body + '</details>';
     }
 
     let latestRuns = {};
     let latestRunList = [];
+    let resizing = false;
     const selections = {};
+    function renderCounts(runs) {
+      const waiting = runs.filter(function (run) { return run.pending; }).length;
+      const running = runs.filter(function (run) {
+        return run.status === 'running' && !run.pending;
+      }).length;
+      const finished = runs.filter(function (run) {
+        return run.status === 'done' || run.status === 'error' || run.status === 'cancelled';
+      }).length;
+      const parts = [];
+      if (waiting) parts.push('<span class="needs">' + waiting + ' waiting</span>');
+      if (running) parts.push('<span class="running">' + running + ' running</span>');
+      if (finished) parts.push('<span>' + finished + ' finished</span>');
+      return parts.length ? '<span class="app-counts">' + parts.join('') + '</span>' : '';
+    }
+
     function render(runs) {
       latestRuns = {};
       latestRunList = runs;
       runs.forEach(function (run) { latestRuns[run.id] = run; });
+      if (resizing) return;
       const app = document.getElementById('app');
+      const scroll = document.querySelector('.runs');
+      const scrollTop = scroll ? scroll.scrollTop : 0;
 
       const previous = {};
       runs.forEach(function (run) {
@@ -1379,19 +1511,30 @@ export class RunsConsole {
 
       let header = '<div class="app-header">';
       header += '<span class="app-title">cc-sdd Runs</span>';
-      header += '<span class="app-hint">Headless Claude Code runs. Pick agent "claude-console" in settings.</span>';
+      header += '<span class="app-hint">Phase runs in this window</span>';
+      header += renderCounts(runs);
       header += '<span class="app-actions"><button class="secondary" data-act="overview">Overview</button>';
-      if (runs.some(function (run) { return run.status !== 'running'; })) {
-        header += '<button class="secondary" data-act="clearFinished">Clear finished</button>';
+      if (runs.some(function (run) {
+        return run.status === 'done' || run.status === 'error' || run.status === 'cancelled';
+      })) {
+        header += '<button class="text-button" data-act="clearFinished">Clear finished</button>';
       }
       header += '</span></div>';
 
       if (!runs.length) {
-        app.innerHTML = header + '<div class="app-hint">No runs yet. Start a phase from the cc-sdd tree.</div>';
+        app.innerHTML = header + '<div class="runs"><div class="empty-state">' +
+          '<p class="empty-title">No runs yet</p>' +
+          '<p class="empty-body">Start a phase from the cc-sdd tree. The log appears here while the agent works.</p>' +
+          '</div></div>';
         return;
       }
 
-      app.innerHTML = header + runs.map(renderRun).join('');
+      app.innerHTML = header + '<div class="runs">' + runs.map(renderRun).join('') + '</div>';
+
+      const nextScroll = app.querySelector('.runs');
+      if (nextScroll && scrollTop) {
+        nextScroll.scrollTop = scrollTop;
+      }
 
       runs.forEach(function (run) {
         const element = document.getElementById(run.id);
@@ -1429,6 +1572,24 @@ export class RunsConsole {
     });
 
     document.getElementById('app').addEventListener('keydown', (event) => {
+      const resizeHandle = event.target.closest('.log-resize');
+      if (resizeHandle) {
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          const runId = resizeHandle.getAttribute('data-run');
+          const card = runId ? document.getElementById(runId) : null;
+          const log = card && card.querySelector('.log');
+          if (!log) return;
+          const current = logHeights[runId] || log.getBoundingClientRect().height;
+          const max = Math.max(160, window.innerHeight - 160);
+          const delta = event.key === 'ArrowDown' ? 24 : -24;
+          logHeights[runId] = Math.round(Math.min(max, Math.max(96, current + delta)));
+          render(latestRunList);
+          const nextHandle = document.querySelector('.log-resize[data-run="' + runId + '"]');
+          if (nextHandle) nextHandle.focus();
+        }
+        return;
+      }
       if (event.key !== 'Enter') return;
       const input = event.target.closest('.resume-input');
       if (!input) return;
@@ -1437,6 +1598,72 @@ export class RunsConsole {
         '[data-act="resumeConsole"][data-run="' + runId + '"], [data-act="continue"][data-run="' + runId + '"]',
       );
       if (button) button.click();
+    });
+
+    let dragState = null;
+    document.getElementById('app').addEventListener('pointerdown', (event) => {
+      const handle = event.target.closest('.log-resize');
+      if (!handle) return;
+      const runId = handle.getAttribute('data-run');
+      const card = runId ? document.getElementById(runId) : null;
+      const log = card && card.querySelector('.log');
+      if (!log) return;
+      event.preventDefault();
+      dragState = {
+        runId: runId,
+        log: log,
+        startY: event.clientY,
+        startHeight: log.getBoundingClientRect().height,
+        moved: false,
+      };
+      resizing = true;
+      document.body.classList.add('resizing');
+      if (handle.setPointerCapture) {
+        try {
+          handle.setPointerCapture(event.pointerId);
+        } catch {
+          // Pointer capture is optional; the window listeners still end the drag.
+        }
+      }
+    });
+
+    document.getElementById('app').addEventListener('pointermove', (event) => {
+      if (!dragState) return;
+      const delta = event.clientY - dragState.startY;
+      if (Math.abs(delta) > 1) dragState.moved = true;
+      const max = Math.max(160, window.innerHeight - 160);
+      const next = Math.round(Math.min(max, Math.max(96, dragState.startHeight + delta)));
+      dragState.log.style.height = next + 'px';
+      dragState.log.classList.add('resized');
+      logHeights[dragState.runId] = next;
+    });
+
+    function endResize() {
+      if (!dragState) return;
+      const moved = dragState.moved;
+      const runId = dragState.runId;
+      dragState = null;
+      resizing = false;
+      document.body.classList.remove('resizing');
+      if (!moved) return;
+      render(latestRunList);
+      const handle = document.querySelector('.log-resize[data-run="' + runId + '"]');
+      if (handle) handle.focus();
+    }
+    document.getElementById('app').addEventListener('pointerup', endResize);
+    document.getElementById('app').addEventListener('pointercancel', endResize);
+    window.addEventListener('pointerup', endResize);
+    window.addEventListener('pointercancel', endResize);
+    window.addEventListener('blur', endResize);
+
+    document.getElementById('app').addEventListener('dblclick', (event) => {
+      const handle = event.target.closest('.log-resize');
+      if (!handle) return;
+      const runId = handle.getAttribute('data-run');
+      delete logHeights[runId];
+      render(latestRunList);
+      const nextHandle = document.querySelector('.log-resize[data-run="' + runId + '"]');
+      if (nextHandle) nextHandle.focus();
     });
 
     document.getElementById('app').addEventListener('click', (event) => {

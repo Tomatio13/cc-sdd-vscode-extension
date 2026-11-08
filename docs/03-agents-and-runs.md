@@ -167,12 +167,14 @@ Overview は Runs コンソールの**読み取り専用ビュー**として run
 
 ### コンソールの描画
 
-- ツール呼び出しはカテゴリ別チップ(`Read` / `Write` / `Bash` / `Search` / `Agent` / `Web`)+ 折りたたみ結果
+- ツール呼び出しはツール名のモノスペースチップ + 折りたたみ結果。行間はヘアラインで区切る
 - アシスタント出力はミニ Markdown(見出し・箇条書き・表・コードブロック・インラインコード・太字)
-- 実行中は進捗バー + ライブ経過時間、待機中は `WAITING FOR YOU`
-- 完了時は `RUN FINISHED` カード(コスト・ターン数・実行時間)
+- 実行中は 2px の進捗線 + ライブ経過時間、待機中はステータスが `Needs you` になる
+- 完了時は `Run finished` カード(入力 / 出力 / キャッシュ / コスト / ターン数 / 実行時間)
 - 承認ゲートを通過したフェーズでは `Approve …` / `Run next: …` / `Run implementation` を表示(`getPhaseActions`)
-- ヘッダーの **Overview** でボードを開ける。`Outline` / `New tab` / `Clear finished` もここに並ぶ
+- ヘッダーの **Overview** でボードを開ける。`Clear finished` は完了カードを閉じる(実行中とセッションプレビューは残す)。run カード側は `Open tab` / `Copy prompt` / `Trace` / `Cancel`(完了後は `Re-run` / `Trace` / `Close`)
+- 各カードの下端（`Session usage` ステータスバーの下）のグリップをドラッグするとログの高さを変更できる。ダブルクリックで既定の高さに戻る。グリップにフォーカスして ↑ / ↓ キーでも 24px ずつ調整できる
+- セッションプレビューの `Session usage` は枠なしの横一列ステータスバー(狭い幅では折り返す)
 
 ### 完了後の継続(Continue)
 
@@ -182,10 +184,10 @@ Overview は Runs コンソールの**読み取り専用ビュー**として run
 
 - `result.modelUsage`(全モデル合計)を権威値として、入力 / 出力 / キャッシュ(読み取り・書き込み)/ コストを表示する
 - assistant メッセージの usage はプロバイダによって 0 のことがあるため、0 のターンは行を作らない(最終値は result で確定)
-- ターン別の `Token usage · N turns` 表(入力 / 出力 / cache read / cache write / Δt)を折りたたみ表示
-- `Trace` ボタンは**実行中でも押せる**(その時点のスナップショット。JSON に `snapshot: true` が入る)。完了カードのヘッダー / RUN FINISHED サマリ内の `Save trace`、コマンドパレットの `cc-sdd: Save Last Run Trace` からも保存できる。出力先は `.kiro/runs/<timestamp>-<skill>-<feature>.json`(usage / turnUsage / segments / history / summary)
+- ターン別の `Token usage · N turns` 表(In / Out / Cache read / Cache write / Gap)を折りたたみ表示
+- `Trace` ボタンは**実行中でも押せる**(その時点のスナップショット。JSON に `snapshot: true` が入る)。完了カードのヘッダー / `Run finished` サマリ内の `Save trace`、コマンドパレットの `cc-sdd: Save Last Run Trace` からも保存できる。出力先は `.kiro/runs/<timestamp>-<skill>-<feature>.json`(usage / turnUsage / segments / history / summary)
 - セッションのプレビューカードでも `Trace` を押せる(そのセッションの履歴と usage を `.kiro/runs/session-<timestamp>-<id>.json` に保存)
-- `permission_denials` はサマリの `denied N` チップに表示
+- `permission_denials` はサマリの統計行に `denied N` として表示
 
 ### 権限モードの既定
 
