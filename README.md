@@ -6,9 +6,9 @@ English | <a href="./README_ja.md">日本語</a>
 
 A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** board for parallel workers.
 
-![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Overview board in the middle, and the cc-sdd Runs console streaming a /kiro-spec-requirements run](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview board on the right](./assets/workbench.png)
 
-<div align="center"><sub>Specs, Tasks, and Sessions on the left. The Overview board summarizes waiting workers, live runs, today's spend, and spec progress. The Runs console on the right streams tool calls, markdown output, and progress — permission prompts and <code>AskUserQuestion</code> appear as buttons in the same panel.</sub></div>
+<div align="center"><sub>Specs, Tasks, and Sessions on the left. The Runs console in the middle streams tool calls, markdown output, and progress — permission prompts and <code>AskUserQuestion</code> appear as buttons in the same panel. The Overview board on the right summarizes waiting workers, live runs, today's spend, and spec progress.</sub></div>
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 

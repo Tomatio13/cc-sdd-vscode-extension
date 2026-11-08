@@ -133,7 +133,7 @@ git push origin v0.9.0   # これで Release まで自動
 
 ### README のキャプチャを更新する
 
-1. VS Code で Specs / Overview / Runs を並べた状態を撮る
+1. VS Code で Specs / Runs / Overview を並べた状態を撮る
 2. 全体を `assets/workbench.png`(1800px 幅程度)にリサイズ
 3. Overview パネルだけを `assets/overview.png`(1000px 幅程度)にクロップ
 4. `npm run package` で VSIX にも反映(README / assets は VSIX に含まれる)

@@ -8,9 +8,9 @@
 
 設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
-![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバー、cc-sdd Overview ボード、/kiro-spec-requirements を実行中の cc-sdd Runs コンソール](./assets/workbench.png)
+![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバー、中央の cc-sdd Runs コンソール、右の cc-sdd Overview ボード](./assets/workbench.png)
 
-<div align="center"><sub>左に Specs / Tasks / Sessions。中央の Overview ボードは対応待ち・実行中・当日コスト・spec 進捗をまとめて表示します。右の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。</sub></div>
+<div align="center"><sub>左に Specs / Tasks / Sessions。中央の cc-sdd Runs コンソールはツール呼び出し・Markdown 出力・進捗をストリーミング表示し、権限確認と <code>AskUserQuestion</code> は同じパネル内のボタンで回答できます。右の Overview ボードは対応待ち・実行中・当日コスト・spec 進捗をまとめて表示します。</sub></div>
 
 ## フローの対応範囲
 
