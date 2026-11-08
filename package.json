@@ -2,7 +2,7 @@
   "name": "cc-sdd-vscode",
   "displayName": "cc-sdd Specs",
   "description": "Spec-Driven Development workbench for cc-sdd: spec explorer, approval gates, and task board for .kiro/specs.",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "publisher": "gotalab",
   "license": "MIT",
   "private": true,
