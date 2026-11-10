@@ -4,12 +4,13 @@
 // reveal work happening in other windows or terminals).
 import type { RunState } from '../run/claudeRunner';
 import type { SessionRecord } from './sessions';
-import type { SpecRecord } from './repository';
-import { PHASE_META } from './phases';
+import { specCreatedAt, specUpdatedAt, type SpecRecord } from './repository';
+import { PHASE_META, nextStepLabel } from './phases';
 import {
   PHASES,
-  nextAction,
+  nextStepState,
   phaseStatus,
+  type NextStepState,
   type PhaseKey,
   type PhaseStatus,
 } from './spec';
@@ -49,13 +50,14 @@ export interface OverviewSpec {
   id: string;
   label: string;
   phase: string;
-  ready: boolean;
+  createdAt: number;
   approvals: Record<PhaseKey, PhaseStatus>;
   approvedCount: number;
   reviewPhases: PhaseKey[];
   tasksDone: number;
   tasksTotal: number;
-  nextLabel: string;
+  nextKind: NextStepState['kind'];
+  nextLabel?: string;
   active: number;
   attention: number;
   sessionsToday: number;
@@ -309,6 +311,9 @@ const buildSpec = (
     }
   }
 
+  const step = nextStepState(record.spec, { done, total: tasks.length });
+  const createdAt = specCreatedAt(record);
+
   const matching = cards.filter(
     (card) => card.feature === record.id && card.column !== 'done' && card.column !== 'failed',
   );
@@ -326,14 +331,14 @@ const buildSpec = (
     id: record.id,
     label: record.spec?.feature_name?.trim() || record.id,
     phase: record.spec?.phase ?? 'unknown',
-    ready: record.spec?.ready_for_implementation === true,
+    createdAt,
     approvals,
     approvedCount: PHASES.filter((phase) => record.spec?.approvals[phase].approved === true)
       .length,
     reviewPhases,
     tasksDone: done,
     tasksTotal: tasks.length,
-    nextLabel: record.spec ? nextAction(record.spec).label : 'spec.json missing',
+    nextKind: step.kind,
     active: matching.filter((card) => card.column === 'running').length,
     attention: matching.filter((card) => card.column === 'attention').length,
     sessionsToday: sessions.filter(
@@ -343,6 +348,11 @@ const buildSpec = (
     tasksPath: record.artifacts.tasks,
   };
 
+  const nextLabel = nextStepLabel(step);
+  if (nextLabel) {
+    spec.nextLabel = nextLabel;
+  }
+
   if (sessionCost > 0) {
     spec.costTodayUsd = sessionCost;
   }
@@ -350,7 +360,7 @@ const buildSpec = (
   if (reviewSince !== undefined) {
     spec.reviewSince = reviewSince;
   }
-  let updatedAt = parseUpdatedAt(record.spec?.updated_at);
+  let updatedAt = specUpdatedAt(record);
   for (const session of sessions) {
     if (session.feature === sessionFeature && session.updatedAt > (updatedAt ?? 0)) {
       updatedAt = session.updatedAt;
@@ -368,28 +378,6 @@ const buildSpec = (
     spec.error = record.specError;
   }
   return spec;
-};
-
-const specRank = (spec: OverviewSpec): number => {
-  if (spec.error) {
-    return 0;
-  }
-  if (spec.attention > 0) {
-    return 1;
-  }
-  if (spec.active > 0) {
-    return 2;
-  }
-  if (spec.reviewPhases.length > 0) {
-    return 3;
-  }
-  if (spec.ready) {
-    return 4;
-  }
-  if (spec.tasksTotal > 0 && spec.tasksDone === spec.tasksTotal) {
-    return 5;
-  }
-  return 6;
 };
 
 /** Builds the overview model. Pure: no file system or VS Code access. */
@@ -445,11 +433,8 @@ export const buildOverview = (input: OverviewInput): OverviewModel => {
   const overviewSpecs = specs
     .map((spec) => buildSpec(spec, cards, sessions, dayStart))
     .sort((left, right) => {
-      const rank = specRank(left) - specRank(right);
-      if (rank !== 0) {
-        return rank;
-      }
-      return left.label.localeCompare(right.label);
+      const created = right.createdAt - left.createdAt;
+      return created !== 0 ? created : left.label.localeCompare(right.label);
     });
 
   // Approvals are "needs you" work too. Putting them on the board keeps the
@@ -466,7 +451,7 @@ export const buildOverview = (input: OverviewInput): OverviewModel => {
         skill: 'approval',
         column: 'attention',
         tone: 'attention',
-        label: `Review ${phase}`,
+        label: `Review ${PHASE_META[phase].label}`,
         detail: `${PHASE_META[phase].file} is waiting for approval.`,
         startedAt: waitingSince,
         updatedAt: waitingSince,

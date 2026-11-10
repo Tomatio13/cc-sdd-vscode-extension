@@ -35,7 +35,7 @@ import {
   type AgentConfig,
   type AgentKind,
 } from './launch/agentLauncher';
-import { SpecTreeProvider } from './ui/specTree';
+import { SpecTreeProvider, type SpecSort } from './ui/specTree';
 import { StatusBar } from './ui/statusBar';
 import { OverviewStatusBar } from './ui/overviewStatusBar';
 import { TaskTreeProvider } from './ui/taskTree';
@@ -164,6 +164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ]);
       return { steering, roadmap };
     },
+    () => configuration().get<SpecSort>('specSort', 'newest'),
   );
 
   const getActiveSpec = async (): Promise<SpecRecord | undefined> => {
@@ -213,6 +214,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const refresh = async (): Promise<void> => {
     const active = await getActiveSpec();
+    specProvider.setActive(active?.id);
     specProvider.refresh();
     taskProvider.setActive(active);
     statusBar.update(active);
@@ -270,6 +272,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     activeSpecId = record.id;
     await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
+    specProvider.setActive(record.id);
     taskProvider.setActive(record);
     statusBar.update(record);
   };

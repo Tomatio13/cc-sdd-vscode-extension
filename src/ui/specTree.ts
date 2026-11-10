@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
-import { PHASE_META } from '../core/phases';
-import type {
-  RoadmapInfo,
-  SpecRecord,
-  SteeringStatus,
-} from '../core/repository';
+import { PHASE_META, nextStepLabel } from '../core/phases';
+import { specCreatedAt, type RoadmapInfo, type SpecRecord, type SteeringStatus } from '../core/repository';
 import {
   PHASES,
   nextAction,
+  nextStepState,
   phaseStatus,
   type PhaseKey,
   type PhaseStatus,
@@ -27,27 +24,40 @@ export interface TasksProgress {
   nextId?: string;
 }
 
+type ImplementationState = 'missing-tasks' | 'in-progress' | 'complete';
+
+export type SpecSort = 'newest' | 'roadmap';
+
 export type SpecTreeNode =
-  | { kind: 'spec'; record: SpecRecord; deps?: string[] }
+  | { kind: 'spec'; record: SpecRecord; deps?: string[]; progress?: TasksProgress }
   | { kind: 'steering'; status: SteeringStatus }
   | { kind: 'roadmap'; info: RoadmapInfo }
-  | {
-      kind: 'state';
-      record: SpecRecord;
-      label: string;
-      description?: string;
-      icon: string;
-      contextValue: string;
-    }
   | {
       kind: 'action';
       record: SpecRecord;
       label: string;
       detail?: string;
+      tooltip?: string;
       icon: string;
       command?: vscode.Command;
     }
-  | { kind: 'phase'; record: SpecRecord; phase: PhaseKey; status: PhaseStatus; tasksProgress?: TasksProgress }
+  | {
+      kind: 'phase';
+      record: SpecRecord;
+      phase: PhaseKey;
+      status: PhaseStatus;
+      order: number;
+      current: boolean;
+      tasksProgress?: TasksProgress;
+    }
+  | {
+      kind: 'implementation';
+      record: SpecRecord;
+      state: ImplementationState;
+      progress?: TasksProgress;
+      nextTask?: ParsedTask;
+      remaining: number;
+    }
   | { kind: 'task'; record: SpecRecord; task: ParsedTask; remaining: number }
   | { kind: 'message'; label: string; description?: string };
 
@@ -64,35 +74,191 @@ const summarizeTasks = (content: string | undefined): TasksProgress | undefined 
   return { done, total: tasks.length, nextId: next?.id };
 };
 
-const nextActionLabel = (record: SpecRecord): string => {
-  if (!record.spec) {
-    return 'spec.json missing';
+/** Newest first, matching the Overview portfolio. */
+const compareNewest = (left: SpecRecord, right: SpecRecord): number => {
+  const delta = specCreatedAt(right) - specCreatedAt(left);
+  if (delta !== 0) {
+    return delta;
   }
-  const action = nextAction(record.spec);
-  if (action.kind === 'implement') {
-    return 'implement';
-  }
-  return `${action.kind === 'generate' ? 'generate' : 'review'} ${action.phase}`;
+  return left.id.localeCompare(right.id);
 };
 
-const specItem = (record: SpecRecord, deps?: string[]): vscode.TreeItem => {
-  const ready = record.spec?.ready_for_implementation === true;
-  const label = record.spec?.feature_name?.trim() || record.id;
-  const approvedCount = record.spec
-    ? PHASES.filter((phase) => record.spec?.approvals[phase].approved).length
-    : 0;
+const compareRoadmap = (
+  roadmap: RoadmapInfo,
+  left: SpecRecord,
+  right: SpecRecord,
+): number => {
+  const leftIndex = roadmap.order.indexOf(left.id);
+  const rightIndex = roadmap.order.indexOf(right.id);
+  if (leftIndex === -1 && rightIndex === -1) {
+    return compareNewest(left, right);
+  }
+  if (leftIndex === -1) {
+    return 1;
+  }
+  if (rightIndex === -1) {
+    return -1;
+  }
+  return leftIndex - rightIndex;
+};
 
-  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
+const approvedCount = (record: SpecRecord): number => {
+  const spec = record.spec;
+  return spec ? PHASES.filter((phase) => spec.approvals[phase].approved).length : 0;
+};
+
+const nextActionLabel = (record: SpecRecord, progress: TasksProgress | undefined): string | undefined => {
+  if (!record.spec) {
+    return undefined;
+  }
+  return nextStepLabel(nextStepState(record.spec, progress));
+};
+
+/** The single obvious next action, derived from the same state as the steps. */
+const nextStep = (
+  record: SpecRecord,
+  progress: TasksProgress | undefined,
+): {
+  label: string;
+  detail?: string;
+  tooltip?: string;
+  icon: string;
+  command?: vscode.Command;
+} | undefined => {
+  const spec = record.spec;
+  if (!spec) {
+    return undefined;
+  }
+
+  const step = nextStepState(spec, progress);
+  const label = nextStepLabel(step);
+  if (!label) {
+    return undefined;
+  }
+
+  if (step.kind === 'generate') {
+    const meta = PHASE_META[step.phase];
+    return {
+      label: `Next: ${label}`,
+      detail: step.phase === 'tasks' && !progress ? 'tasks.md missing' : `/${meta.skill}`,
+      icon: 'play',
+      command: {
+        command: 'ccSdd.runPhase',
+        title: 'Run Phase',
+        arguments: [{ record, phase: step.phase }],
+      },
+    };
+  }
+
+  if (step.kind === 'review') {
+    const meta = PHASE_META[step.phase];
+    // Reviewing should open the artifact; approval stays on the step's inline button.
+    return {
+      label: `Next: ${label}`,
+      detail: meta.file,
+      tooltip: `Open ${meta.file}, then approve it from the check button on step ${
+        PHASES.indexOf(step.phase) + 1
+      }.`,
+      icon: 'eye',
+      command: {
+        command: 'ccSdd.openArtifact',
+        title: 'Open Artifact',
+        arguments: [{ record, phase: step.phase }],
+      },
+    };
+  }
+
+  if (step.kind === 'implement') {
+    return {
+      label: `Next: ${label}`,
+      detail: progress
+        ? `${countLabel(progress.total - progress.done, 'task')} left`
+        : undefined,
+      icon: 'play',
+      command: {
+        command: 'ccSdd.runImpl',
+        title: 'Run Implementation',
+        arguments: [record],
+      },
+    };
+  }
+
+  return undefined;
+};
+
+const specIcon = (
+  record: SpecRecord,
+  progress: TasksProgress | undefined,
+): vscode.ThemeIcon => {
+  const spec = record.spec;
+  if (!spec) {
+    return new vscode.ThemeIcon('warning');
+  }
+  const action = nextAction(spec);
+  if (action.kind === 'implement') {
+    if (!progress) {
+      return new vscode.ThemeIcon('warning');
+    }
+    return new vscode.ThemeIcon(progress.done >= progress.total ? 'pass-filled' : 'rocket');
+  }
+  return new vscode.ThemeIcon(action.kind === 'review' ? 'clock' : 'circle-outline');
+};
+
+const specDescription = (
+  record: SpecRecord,
+  active: boolean,
+  progress: TasksProgress | undefined,
+): string => {
+  const parts: string[] = [];
+  if (active) {
+    parts.push('active');
+  }
+
+  const spec = record.spec;
+  if (!spec) {
+    parts.push(record.specError ? 'spec.json invalid' : 'spec.json missing');
+    return parts.join(' · ');
+  }
+
+  const approved = `${approvedCount(record)}/3 approved`;
+  const action = nextAction(spec);
+  if (action.kind === 'implement') {
+    if (!progress) {
+      parts.push(approved, 'tasks missing');
+    } else if (progress.done >= progress.total) {
+      parts.push('done', `${progress.done}/${progress.total} tasks`);
+    } else {
+      parts.push(approved, `${progress.done}/${progress.total} tasks`);
+    }
+  } else {
+    parts.push(approved, `next: ${PHASE_META[action.phase].label}`);
+  }
+
+  return parts.join(' · ');
+};
+
+const specItem = (
+  record: SpecRecord,
+  active: boolean,
+  deps: string[] | undefined,
+  progress: TasksProgress | undefined,
+): vscode.TreeItem => {
+  const spec = record.spec;
+  const complete = progress !== undefined && progress.done >= progress.total;
+  const label = spec?.feature_name?.trim() || record.id;
+
+  const item = new vscode.TreeItem(
+    label,
+    complete ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+  );
   item.id = `spec:${record.id}`;
-  item.contextValue = ready ? 'spec-ready' : 'spec';
-  item.description = record.spec
-    ? [`${approvedCount}/3 approved`, ready ? 'ready' : `next: ${nextActionLabel(record)}`].join(
-        ' · ',
-      )
-    : record.specError
-      ? 'spec.json invalid'
-      : 'spec.json missing';
-  item.iconPath = new vscode.ThemeIcon('book');
+  item.contextValue = complete
+    ? 'spec-complete'
+    : spec && nextAction(spec).kind === 'implement'
+      ? 'spec-ready'
+      : 'spec';
+  item.description = specDescription(record, active, progress);
+  item.iconPath = specIcon(record, progress);
   item.command = {
     command: 'ccSdd.selectSpec',
     title: 'Select Spec',
@@ -106,19 +272,25 @@ const specItem = (record: SpecRecord, deps?: string[]): vscode.TreeItem => {
   if (deps && deps.length > 0) {
     tooltip.appendMarkdown(`After: ${deps.join(', ')}\n\n`);
   }
-  if (record.spec) {
-    tooltip.appendMarkdown(`Next: ${nextActionLabel(record)}\n\n`);
+  if (spec) {
+    const next = nextActionLabel(record, progress);
+    if (next) {
+      tooltip.appendMarkdown(`Next: ${next}\n\n`);
+    }
     tooltip.appendMarkdown(
-      `Approvals: ${PHASES.map((phase) => {
-        const approval = record.spec?.approvals[phase];
-        const mark = approval?.approved
+      `Steps: ${PHASES.map((phase) => {
+        const approval = spec.approvals[phase];
+        const mark = approval.approved
           ? '$(pass-filled)'
-          : approval?.generated
-            ? '$(diff)'
+          : approval.generated
+            ? '$(clock)'
             : '$(circle-outline)';
         return `${mark} ${PHASE_META[phase].label}`;
       }).join('  ')}\n\n`,
     );
+    if (progress) {
+      tooltip.appendMarkdown(`Tasks: ${progress.done}/${progress.total} done\n\n`);
+    }
   }
   if (record.specError) {
     tooltip.appendMarkdown(`$(error) ${record.specError}\n`);
@@ -128,34 +300,38 @@ const specItem = (record: SpecRecord, deps?: string[]): vscode.TreeItem => {
   return item;
 };
 
+const phaseIcon = (status: PhaseStatus, current: boolean): vscode.ThemeIcon => {
+  if (status === 'generated') {
+    return new vscode.ThemeIcon('clock');
+  }
+  if (current) {
+    return new vscode.ThemeIcon('arrow-circle-right');
+  }
+  return new vscode.ThemeIcon(phaseStateIcon(status));
+};
+
 const phaseItem = (
   record: SpecRecord,
   phase: PhaseKey,
   status: PhaseStatus,
+  order: number,
+  current: boolean,
   tasksProgress?: TasksProgress,
 ): vscode.TreeItem => {
   const meta = PHASE_META[phase];
-  const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
+  const item = new vscode.TreeItem(`${order}. ${meta.label}`, vscode.TreeItemCollapsibleState.None);
   item.id = `phase:${record.id}:${phase}`;
   item.contextValue = `phase-${status}`;
-
-  const description: string[] = [];
-  if (tasksProgress) {
-    description.push(`${tasksProgress.done}/${tasksProgress.total} done`);
-    if (tasksProgress.nextId) {
-      description.push(`next ${tasksProgress.nextId}`);
-    }
-  } else {
-    description.push(phaseStateLabel(status));
-  }
-  item.description = description.join(' · ');
-  item.iconPath = new vscode.ThemeIcon(phaseStateIcon(status));
+  item.description = tasksProgress
+    ? `${tasksProgress.done}/${tasksProgress.total} done`
+    : phaseStateLabel(status);
+  item.iconPath = phaseIcon(status, current);
 
   const details = [
-    meta.description,
+    `Step ${order} of ${PHASES.length} · ${meta.description}`,
+    `Status: ${phaseStateLabel(status)}${current ? ' (next)' : ''}`,
     record.artifacts[phase],
     `Skill: /${meta.skill}`,
-    `Status: ${phaseStateLabel(status)}`,
   ];
   if (tasksProgress) {
     details.push(`Progress: ${tasksProgress.done}/${tasksProgress.total} done`);
@@ -169,6 +345,57 @@ const phaseItem = (
     status === 'missing'
       ? { command: 'ccSdd.runPhase', title: 'Run Phase', arguments: [{ record, phase }] }
       : { command: 'ccSdd.openArtifact', title: 'Open Artifact', arguments: [{ record, phase }] };
+  return item;
+};
+
+const implementationItem = (node: Extract<SpecTreeNode, { kind: 'implementation' }>): vscode.TreeItem => {
+  const { record, state, progress, nextTask, remaining } = node;
+  const collapsible = nextTask
+    ? vscode.TreeItemCollapsibleState.Collapsed
+    : vscode.TreeItemCollapsibleState.None;
+
+  const item = new vscode.TreeItem('4. Implementation', collapsible);
+  item.id = `implementation:${record.id}`;
+  item.contextValue = `impl-${state}`;
+
+  if (state === 'missing-tasks') {
+    item.description = 'tasks.md missing';
+    item.iconPath = new vscode.ThemeIcon('warning');
+  } else if (!progress || state === 'complete') {
+    item.description = progress ? `${progress.done}/${progress.total} done` : 'complete';
+    item.iconPath = new vscode.ThemeIcon('pass-filled');
+  } else {
+    item.description = `${progress.done}/${progress.total} done`;
+    item.iconPath = new vscode.ThemeIcon('rocket');
+  }
+
+  const details = ['Step 4 · implementation after all phases are approved'];
+  if (progress) {
+    details.push(`Progress: ${progress.done}/${progress.total} done`);
+  }
+  if (nextTask) {
+    details.push(`Next task: ${nextTask.id}. ${nextTask.title}`);
+    details.push(`Remaining: ${countLabel(remaining, 'task')}`);
+    details.push('Expand to open the next task.');
+  } else if (state === 'complete') {
+    details.push('Validation is an optional quality gate; run it from the inline button or context menu.');
+  }
+  item.tooltip = details.join('\n\n');
+
+  if (state === 'missing-tasks') {
+    item.command = {
+      command: 'ccSdd.runPhase',
+      title: 'Run Phase',
+      arguments: [{ record, phase: 'tasks' as PhaseKey }],
+    };
+  } else if (state === 'complete') {
+    item.command = {
+      command: 'ccSdd.openArtifact',
+      title: 'Open Artifact',
+      arguments: [{ record, phase: 'tasks' as PhaseKey }],
+    };
+  }
+
   return item;
 };
 
@@ -229,9 +456,8 @@ const steeringItem = (status: SteeringStatus): vscode.TreeItem => {
   } else {
     item.description = 'not started';
   }
-  item.iconPath = new vscode.ThemeIcon(
-    allPresent ? 'pass-filled' : partial ? 'circle-outline' : 'circle-slash',
-  );
+  // Keep steering visually distinct from specs.
+  item.iconPath = new vscode.ThemeIcon('globe');
   item.tooltip = [
     'Project context for spec generation (product, tech, structure).',
     '',
@@ -239,7 +465,9 @@ const steeringItem = (status: SteeringStatus): vscode.TreeItem => {
       (file) => `${file.exists ? '$(pass-filled)' : '$(circle-slash)'} ${file.name}`,
     ),
     '',
-    allPresent ? 'Open product.md' : 'Run /kiro-steering',
+    allPresent
+      ? 'Click to open product.md. Use the sync button to run /kiro-steering again.'
+      : 'Click to run /kiro-steering and fill in the missing files.',
   ].join('\n');
 
   item.command = allPresent
@@ -262,6 +490,8 @@ const roadmapItem = (info: RoadmapInfo): vscode.TreeItem => {
 export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
   private readonly changed = new vscode.EventEmitter<SpecTreeNode | undefined | void>();
 
+  private activeId: string | undefined;
+
   readonly onDidChangeTreeData = this.changed.event;
 
   constructor(
@@ -274,7 +504,16 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
       steering: SteeringStatus;
       roadmap: RoadmapInfo | undefined;
     }>,
+    private readonly getSort: () => SpecSort,
   ) {}
+
+  setActive(specId: string | undefined): void {
+    if (this.activeId === specId) {
+      return;
+    }
+    this.activeId = specId;
+    this.changed.fire();
+  }
 
   refresh(): void {
     this.changed.fire();
@@ -283,39 +522,36 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
   async getChildren(element?: SpecTreeNode): Promise<SpecTreeNode[]> {
     if (!element) {
       const [records, info] = await Promise.all([this.load(), this.workspaceInfo()]);
-      const nodes: SpecTreeNode[] = [];
+      const progress = new Map<string, TasksProgress | undefined>();
+      await Promise.all(
+        records.map(async (record) => {
+          progress.set(record.id, summarizeTasks(await this.readArtifact(record, 'tasks')));
+        }),
+      );
 
-      if (info.roadmap) {
-        nodes.push({ kind: 'roadmap', info: info.roadmap });
-        const order = info.roadmap.order;
-        const sorted = [...records].sort((left, right) => {
-          const leftIndex = order.indexOf(left.id);
-          const rightIndex = order.indexOf(right.id);
-          if (leftIndex === -1 && rightIndex === -1) {
-            return left.id.localeCompare(right.id);
-          }
-          if (leftIndex === -1) {
-            return 1;
-          }
-          if (rightIndex === -1) {
-            return -1;
-          }
-          return leftIndex - rightIndex;
-        });
-        for (const record of sorted) {
-          nodes.push({
-            kind: 'spec',
-            record,
-            deps: info.roadmap.deps[record.id],
-          });
-        }
-      } else {
-        for (const record of records) {
-          nodes.push({ kind: 'spec', record });
-        }
+      const nodes: SpecTreeNode[] = [];
+      const roadmap = info.roadmap;
+      if (roadmap) {
+        nodes.push({ kind: 'roadmap', info: roadmap });
       }
 
-      // Steering 収録は常に最後（Workspace 共通の文脈のため）。 未生成なら先頭で目立たせる。
+      // Default: newest spec first. Roadmap order is opt-in because dependency
+      // order and recency answer different questions.
+      const sorted =
+        this.getSort() === 'roadmap' && roadmap
+          ? [...records].sort((left, right) => compareRoadmap(roadmap, left, right))
+          : [...records].sort(compareNewest);
+
+      for (const record of sorted) {
+        nodes.push({
+          kind: 'spec',
+          record,
+          deps: roadmap?.deps[record.id],
+          progress: progress.get(record.id),
+        });
+      }
+
+      // Steering は Workspace 共通の文脈のため常に先頭。未生成なら目立たせる。
       nodes.unshift({ kind: 'steering', status: info.steering });
       return nodes;
     }
@@ -324,30 +560,33 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
       return this.buildBody(element.record);
     }
 
+    if (element.kind === 'implementation') {
+      return element.nextTask
+        ? [
+            {
+              kind: 'task',
+              record: element.record,
+              task: element.nextTask,
+              remaining: element.remaining,
+            },
+          ]
+        : [];
+    }
+
     return [];
   }
 
   getTreeItem(node: SpecTreeNode): vscode.TreeItem {
     switch (node.kind) {
       case 'spec':
-        return specItem(node.record, node.deps);
+        return specItem(node.record, this.activeId === node.record.id, node.deps, node.progress);
       case 'steering':
         return steeringItem(node.status);
       case 'roadmap':
         return roadmapItem(node.info);
-      case 'state': {
-        const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
-        item.iconPath = new vscode.ThemeIcon(node.icon);
-        item.contextValue = node.contextValue;
-        if (node.description) {
-          item.description = node.description;
-        }
-        item.tooltip = node.record.dir;
-        return item;
-      }
       case 'action': {
         const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
-        item.id = `action:${node.record.id}:${node.label}`;
+        item.id = `action:${node.record.id}:next`;
         item.iconPath = new vscode.ThemeIcon(node.icon);
         if (node.detail) {
           item.description = node.detail;
@@ -355,11 +594,20 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
         if (node.command) {
           item.command = node.command;
         }
-        item.tooltip = node.detail ? `${node.label}\n\n${node.detail}` : node.label;
+        item.tooltip = node.tooltip ?? (node.detail ? `${node.label}\n\n${node.detail}` : node.label);
         return item;
       }
       case 'phase':
-        return phaseItem(node.record, node.phase, node.status, node.tasksProgress);
+        return phaseItem(
+          node.record,
+          node.phase,
+          node.status,
+          node.order,
+          node.current,
+          node.tasksProgress,
+        );
+      case 'implementation':
+        return implementationItem(node);
       case 'task':
         return taskItem(node.record, node.task, node.remaining);
       case 'message': {
@@ -388,136 +636,55 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
     const tasksContent = await this.readArtifact(record, 'tasks');
     const tasks = parseTasks(tasksContent ?? '');
     const done = tasks.filter((task) => task.checked).length;
-    const nextTask = tasks.find((task) => !task.checked);
+    const progress: TasksProgress | undefined =
+      tasks.length > 0
+        ? {
+            done,
+            total: tasks.length,
+            nextId: tasks.find((task) => !task.checked)?.id,
+          }
+        : undefined;
 
-    // 1. Current state
-    if (spec.ready_for_implementation === true) {
-      if (tasksContent === undefined || tasks.length === 0) {
-        nodes.push({
-          kind: 'state',
-          record,
-          label: 'Tasks missing',
-          description: 'tasks.md not found',
-          icon: 'warning',
-          contextValue: 'status-ready',
-        });
-      } else if (!nextTask) {
-        nodes.push({
-          kind: 'state',
-          record,
-          label: 'Implementation complete',
-          description: `${done}/${tasks.length} done`,
-          icon: 'pass-filled',
-          contextValue: 'status-complete',
-        });
-      } else {
-        nodes.push({
-          kind: 'state',
-          record,
-          label: 'Implementation in progress',
-          description: `${done}/${tasks.length} done`,
-          icon: 'run-all',
-          contextValue: 'status-ready',
-        });
-      }
-    } else {
-      const waitingLabel =
-        action.kind === 'review'
-          ? 'Awaiting review'
-          : action.kind === 'generate'
-            ? 'Awaiting generation'
-            : 'Ready to implement';
-      const waitingDetail =
-        action.kind === 'implement'
-          ? 'implementation'
-          : PHASE_META[action.phase].label.toLowerCase();
-      nodes.push({
-        kind: 'state',
-        record,
-        label: waitingLabel,
-        description: waitingDetail,
-        icon: 'clock',
-        contextValue: 'status-waiting',
-      });
+    // 1. One explicit next action, so the tree always answers "what now?".
+    const next = nextStep(record, progress);
+    if (next) {
+      nodes.push({ kind: 'action', record, ...next });
     }
 
-    // 2. Next action
-    if (spec.ready_for_implementation === true) {
-      if (tasksContent === undefined || tasks.length === 0) {
+    // 2. The pipeline in chronological order: Requirements -> Design -> Tasks.
+    const currentPhase = action.kind === 'implement' ? undefined : action.phase;
+    PHASES.forEach((phase, index) => {
+      nodes.push({
+        kind: 'phase',
+        record,
+        phase,
+        status: phaseStatus(spec, phase, record.exists[phase]),
+        order: index + 1,
+        current: phase === currentPhase,
+        tasksProgress: phase === 'tasks' ? progress : undefined,
+      });
+    });
+
+    // 3. Implementation is a fourth step once every phase is approved.
+    if (action.kind === 'implement') {
+      if (!progress) {
         nodes.push({
-          kind: 'action',
+          kind: 'implementation',
           record,
-          label: 'Generate tasks',
-          detail: `/${PHASE_META.tasks.skill}`,
-          icon: 'play',
-          command: {
-            command: 'ccSdd.runPhase',
-            title: 'Run Phase',
-            arguments: [{ record, phase: 'tasks' as PhaseKey }],
-          },
+          state: 'missing-tasks',
+          remaining: 0,
         });
-      } else if (nextTask) {
+      } else {
+        const nextTask = tasks.find((task) => !task.checked);
         nodes.push({
-          kind: 'task',
+          kind: 'implementation',
           record,
-          task: nextTask,
+          state: nextTask ? 'in-progress' : 'complete',
+          progress,
+          nextTask,
           remaining: tasks.length - done,
         });
-        nodes.push({
-          kind: 'action',
-          record,
-          label: 'Continue implementation',
-          detail: `${countLabel(tasks.length - done, 'task')} left`,
-          icon: 'play',
-          command: {
-            command: 'ccSdd.runImpl',
-            title: 'Run Implementation',
-            arguments: [record],
-          },
-        });
-      } else {
-        nodes.push({
-          kind: 'action',
-          record,
-          label: 'Validate implementation',
-          detail: 'all tasks done',
-          icon: 'check-all',
-          command: {
-            command: 'ccSdd.runValidateImpl',
-            title: 'Run Implementation Validation',
-            arguments: [record],
-          },
-        });
       }
-    } else if (action.kind !== 'implement') {
-      const meta = PHASE_META[action.phase];
-      const exists = record.exists[action.phase];
-      const verb = action.kind === 'generate' ? 'Generate' : 'Review';
-      nodes.push({
-        kind: 'action',
-        record,
-        label: `${verb} ${meta.label.toLowerCase()}`,
-        detail: exists ? meta.file : `/${meta.skill}`,
-        icon: action.kind === 'generate' ? 'play' : 'check',
-        command: exists
-          ? {
-              command: 'ccSdd.approvePhase',
-              title: 'Approve Phase',
-              arguments: [{ record, phase: action.phase }],
-            }
-          : {
-              command: 'ccSdd.runPhase',
-              title: 'Run Phase',
-              arguments: [{ record, phase: action.phase }],
-            },
-      });
-    }
-
-    // 3. Phase progress
-    for (const phase of PHASES) {
-      const status = phaseStatus(spec, phase, record.exists[phase]);
-      const tasksProgress = phase === 'tasks' ? summarizeTasks(tasksContent) : undefined;
-      nodes.push({ kind: 'phase', record, phase, status, tasksProgress });
     }
 
     return nodes;

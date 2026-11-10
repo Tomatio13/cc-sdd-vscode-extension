@@ -61,9 +61,11 @@ run が動いている間は `$(dashboard) N waiting · M running` を表示し�
 
 ### Spec ポートフォリオ
 
-全 spec を「対応が必要 → 稼働中 → レビュー待ち → ready → 完了」の順で並べます。
-フェーズ、承認 3 段階、`tasks.md` の進捗バー、当日コスト、次のアクションを表示し、
-クリックで `tasks.md` を開きます。
+全 spec を新しい順（`spec.json` の `created_at`、なければ `updated_at` / ファイル時刻）で並べます。
+Specs ツリーと同じ next step 判定を使い、実装完了後は `Next` を表示しません。
+フェーズ、承認 3 段階、`tasks.md` の進捗バー、当日コスト、最終更新時刻を表示し、
+クリックで `tasks.md` を開きます。最終更新は `spec.json`・成果物・run・session のうち最新の時刻で、
+相対表示（ホバーで絶対時刻）になります。
 
 ## 実装
 
@@ -94,6 +96,9 @@ OverviewModel
 
 - `OverviewCard.source`: `live` / `session` / `review`
 - `OverviewSpec.reviewPhases`: 承認待ちフェーズ。ここから `attention` カードを生成
+- `OverviewSpec.createdAt`: ポートフォリオの並び順に使う作成時刻
+- `OverviewSpec.nextKind` / `nextLabel`: Specs ツリーと共通の next step 判定。完了時は `nextLabel` なし
+- `OverviewSpec.updatedAt`: `spec.json` / 成果物 / run / session のうち最新の更新時刻
 - 各列は 20 件まで。`needsYou` は切り詰める前の件数
 
 ### 更新の流れ

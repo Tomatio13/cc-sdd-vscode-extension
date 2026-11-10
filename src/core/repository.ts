@@ -17,8 +17,13 @@ export interface SpecRecord {
   specJsonPath: string;
   artifacts: Record<PhaseKey, string>;
   exists: Record<PhaseKey, boolean>;
+  /** Artifact mtimes by phase, used for "last updated" in the Overview. */
+  artifactUpdatedAtMs?: Record<PhaseKey, number | undefined>;
   spec: SpecJson | null;
   specError?: string;
+  /** spec.json filesystem timestamps, used when metadata has no dates. */
+  createdAtMs?: number;
+  updatedAtMs?: number;
 }
 
 const isNotFound = (error: unknown): boolean =>
@@ -74,11 +79,20 @@ const readRecord = async (specsRoot: string, id: string): Promise<SpecRecord> =>
   const specJsonPath = path.join(dir, 'spec.json');
   const artifacts = {} as Record<PhaseKey, string>;
   const exists = {} as Record<PhaseKey, boolean>;
+  const artifactUpdatedAtMs = {} as Record<PhaseKey, number | undefined>;
 
   for (const phase of PHASES) {
     const artifactPath = path.join(dir, PHASE_META[phase].file);
     artifacts[phase] = artifactPath;
-    exists[phase] = await isFile(artifactPath);
+    const artifactStat = await fs.stat(artifactPath).catch((error: unknown) => {
+      if (isNotFound(error)) {
+        return undefined;
+      }
+      throw error;
+    });
+    const isArtifactFile = artifactStat?.isFile() === true;
+    exists[phase] = isArtifactFile;
+    artifactUpdatedAtMs[phase] = isArtifactFile ? artifactStat.mtimeMs : undefined;
   }
 
   let spec: SpecJson | null = null;
@@ -98,7 +112,27 @@ const readRecord = async (specsRoot: string, id: string): Promise<SpecRecord> =>
     }
   }
 
-  return { id, dir, specJsonPath, artifacts, exists, spec, specError };
+  const specStat = await fs.stat(specJsonPath).catch((error: unknown) => {
+    if (isNotFound(error)) {
+      return undefined;
+    }
+    throw error;
+  });
+
+  return {
+    id,
+    dir,
+    specJsonPath,
+    artifacts,
+    exists,
+    artifactUpdatedAtMs,
+    spec,
+    specError,
+    createdAtMs: specStat
+      ? specStat.birthtimeMs || specStat.ctimeMs || specStat.mtimeMs
+      : undefined,
+    updatedAtMs: specStat?.mtimeMs,
+  };
 };
 
 export const listSpecs = async (
@@ -124,6 +158,37 @@ export const listSpecs = async (
   );
 
   return records.sort((left, right) => left.id.localeCompare(right.id));
+};
+
+const parseTimestamp = (value: string | undefined): number | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+/** Creation time used for newest-first ordering in both the tree and overview. */
+export const specCreatedAt = (record: SpecRecord): number =>
+  parseTimestamp(record.spec?.created_at) ??
+  parseTimestamp(record.spec?.updated_at) ??
+  record.createdAtMs ??
+  record.updatedAtMs ??
+  0;
+
+/** Latest update time from spec.json and its artifacts. */
+export const specUpdatedAt = (record: SpecRecord): number | undefined => {
+  const artifactUpdatedAt = record.artifactUpdatedAtMs
+    ? Math.max(0, ...PHASES.map((phase) => record.artifactUpdatedAtMs?.[phase] ?? 0))
+    : 0;
+  const candidates = [
+    parseTimestamp(record.spec?.updated_at),
+    record.updatedAtMs,
+    artifactUpdatedAt,
+    parseTimestamp(record.spec?.created_at),
+    record.createdAtMs,
+  ].filter((value): value is number => typeof value === 'number' && value > 0);
+  return candidates.length > 0 ? Math.max(...candidates) : undefined;
 };
 
 export const readArtifact = async (

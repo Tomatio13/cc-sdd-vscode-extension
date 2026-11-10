@@ -86,7 +86,9 @@ Overview ボードは `phaseStatus` と `approvals` から「承認待ちフェ�
 - `readSteering`: `product.md` / `tech.md` / `structure.md` の有無
 - `readRoadmap`: `## Specs (dependency order)` セクションから
   `- [ ] feature -- 説明. Dependencies: a, b` を読み、表示順と依存を抽出
-- Specs ツリーは roadmap があればその順に並べ、spec ノードに `deps:` を表示
+- Specs ツリーの並びは既定で `created_at` の新しい順（なければ `updated_at` → spec.json のファイル時刻 → spec id 順）
+- `ccSdd.specSort: "roadmap"` にすると roadmap があればその依存順に並べる。roadmap に載っていない spec は新しい順
+- spec ノードには roadmap 上の依存 (`deps:`) を表示
 
 ## ビューのノード構成
 
@@ -94,14 +96,17 @@ Overview ボードは `phaseStatus` と `approvals` から「承認待ちフェ�
 
 | ノード | 内容 |
 | --- | --- |
-| `steering` | Steering の生成状況。未生成ならクリックで `/kiro-steering` |
+| `steering` | Steering の生成状況。未生成ならクリックで `/kiro-steering`。生成済みならクリックで product.md を開き、インラインの ⟳ ボタンで再実行できる |
 | `roadmap` | roadmap.md を開く |
-| `spec` | feature ノード(フェーズ・承認数・次アクション・依存を description に表示) |
-| `state` | 実装進捗 / 承認待ち / 完了の要約 |
-| `action` | 「Continue /kiro-impl」「Next: approve tasks」などクリック可能な次アクション |
-| `phase` | Requirements / Design / Tasks。状態とタスク進捗。実行・承認・取消のコマンドを持つ |
-| `task` | 次の未完了タスク(tasks.md の行へジャンプ) |
+| `spec` | feature ノード。状態アイコン、承認数、タスク進捗、次フェーズを description に表示 |
+| `action` | 次にやることを1件だけ表示する「Next: ...」ノード。クリックで生成・レビュー・実装を実行。Implementation 完了後は表示しない |
+| `phase` | Requirements / Design / Tasks を 1→2→3 の順に表示。現在のフェーズは矢印、承認待ちは時計アイコンで示す |
+| `implementation` | 3フェーズ承認後の 4 番目のステップ。進捗と次のタスクを持ち、展開すると次の未完了タスクを開ける。完了後はインラインの盾ボタンから任意の品質ゲートを実行できる |
+| `task` | Implementation の子として表示する次の未完了タスク(tasks.md の行へジャンプ) |
 | `message` | 空状態・spec.json エラーなどの案内 |
+
+色は使わず、アイコンの形と文言で状態を表します。他のツリーと同じ見た目を保つためです。
+アクティブな spec は description の先頭に `active` が付き、Tasks ビューとの対応が分かるようにしています。
 
 ### Tasks(`ui/taskTree.ts`)
 

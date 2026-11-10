@@ -87,7 +87,8 @@
       },
       {
         "command": "ccSdd.runSteering",
-        "title": "cc-sdd: Run Steering"
+        "title": "cc-sdd: Run Steering",
+        "icon": "$(sync)"
       },
       {
         "command": "ccSdd.runValidateGap",
@@ -257,6 +258,31 @@
           "group": "inline@2"
         },
         {
+          "command": "ccSdd.runSteering",
+          "when": "view == ccSdd.specs && viewItem =~ /^steering/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ccSdd.runSteering",
+          "when": "view == ccSdd.specs && viewItem =~ /^steering/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.runImpl",
+          "when": "view == ccSdd.specs && viewItem == impl-in-progress",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.runValidateImpl",
+          "when": "view == ccSdd.specs && viewItem == impl-complete",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.runValidateImpl",
+          "when": "view == ccSdd.specs && viewItem == impl-complete",
+          "group": "navigation@1"
+        },
+        {
           "command": "ccSdd.openArtifact",
           "when": "view == ccSdd.specs && viewItem =~ /^phase-/",
           "group": "inline@1"
@@ -357,6 +383,19 @@
           "type": "string",
           "default": ".kiro",
           "description": "Directory that contains specs/ and settings/, relative to the workspace root."
+        },
+        "ccSdd.specSort": {
+          "type": "string",
+          "enum": [
+            "newest",
+            "roadmap"
+          ],
+          "enumDescriptions": [
+            "Newest specs first, using spec.json created_at (falling back to updated_at).",
+            "Follow the dependency order in roadmap.md when available."
+          ],
+          "default": "newest",
+          "description": "Ordering of specs in the Specs view."
         },
         "ccSdd.agent": {
           "type": "string",

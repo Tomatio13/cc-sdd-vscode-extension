@@ -18,11 +18,11 @@ Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 ## What it does
 
-- **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate) and roadmap.md order/dependencies when they exist.
-- **Spec Explorer** — lists every `.kiro/specs/<feature>` with phase and approval status, ordered by roadmap when available.
+- **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate; use the inline sync button to re-run it after the codebase changes) and roadmap.md order/dependencies when they exist.
+- **Spec Explorer** — lists every `.kiro/specs/<feature>` as a numbered Requirements → Design → Tasks → Implementation pipeline, with one explicit next action until implementation is complete. Newest specs come first by default; set `ccSdd.specSort` to `roadmap` to follow roadmap.md dependency order instead.
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
-- **Overview board** — a leader / PM view that combines live runs, recently active sessions, and spec progress. Kanban columns for `Needs you` / `Running` / `Done` / `Failed`, a today-spend and task KPI strip, and a spec portfolio with approvals and `tasks.md` progress. Click a card to open the run, or a spec to open its `tasks.md`.
+- **Overview board** — a leader / PM view that combines live runs, recently active sessions, and spec progress. Kanban columns for `Needs you` / `Running` / `Done` / `Failed`, a today-spend and task KPI strip, and a newest-first spec portfolio with approvals, `tasks.md` progress, the same next step as the Specs tree, and last-updated times. Click a card to open the run, or a spec to open its `tasks.md`.
 - **Task board** — parses `tasks.md` checkboxes, `(P)` markers, `_Boundary:_`, `_Depends:_`, and `_Requirements:_`. Toggle a task from the tree without leaving the editor.
 - **Sessions** — lists the Claude Code sessions recorded for the current workspace (titles come from the original `/kiro-…` prompt) with token totals and estimated cost, and resumes them in the Runs console or an interactive terminal. Sessions from other projects are never shown.
 - **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
@@ -57,7 +57,7 @@ The extension treats `spec.json` as the single source of truth and only writes a
 | --- | --- |
 | `cc-sdd: Refresh` | Reload specs and tasks. |
 | `cc-sdd: Run Discovery` | Describe the work and launch `/kiro-discovery` (the flow entry point). |
-| `cc-sdd: Run Steering` | Launch `/kiro-steering` (also offered from the Steering node when missing). |
+| `cc-sdd: Run Steering` | Launch `/kiro-steering` (also offered from the Steering node when missing, and from its inline sync button to re-run it). |
 | `cc-sdd: Validate against Codebase (Gap)` | Launch `/kiro-validate-gap` for the active/selected spec (right-click a spec). |
 | `cc-sdd: Validate Design` | Launch `/kiro-validate-design` (right-click a spec). |
 | `cc-sdd: New Spec` | Ask for a description and launch `/kiro-spec-init`. |

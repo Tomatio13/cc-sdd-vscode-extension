@@ -106,6 +106,40 @@ export const nextAction = (spec: SpecJson): NextAction => {
   return { kind: 'implement', label: 'Ready for implementation' };
 };
 
+export type NextStepState =
+  | { kind: 'generate'; phase: PhaseKey }
+  | { kind: 'review'; phase: PhaseKey }
+  | { kind: 'implement' }
+  | { kind: 'done' }
+  | { kind: 'missing' };
+
+/**
+ * Tasks-aware next step shared by the Specs tree and the Overview portfolio.
+ * Returns `done` once implementation is complete: validation is a separate
+ * quality gate, not part of the SDD flow.
+ */
+export const nextStepState = (
+  spec: SpecJson | null,
+  tasks: { done: number; total: number } | undefined,
+): NextStepState => {
+  if (!spec) {
+    return { kind: 'missing' };
+  }
+
+  const action = nextAction(spec);
+  if (action.kind !== 'implement') {
+    return { kind: action.kind, phase: action.phase };
+  }
+
+  if (!tasks || tasks.total === 0) {
+    return { kind: 'generate', phase: 'tasks' };
+  }
+  if (tasks.done >= tasks.total) {
+    return { kind: 'done' };
+  }
+  return { kind: 'implement' };
+};
+
 export const phaseStatus = (
   spec: SpecJson | null,
   phase: PhaseKey,

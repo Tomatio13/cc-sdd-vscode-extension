@@ -41,6 +41,8 @@ const record = (overrides: Partial<SpecRecord> = {}): SpecRecord => ({
   exists: { requirements: true, design: true, tasks: true },
   spec: {
     feature_name: 'Demo feature',
+    created_at: '2026-05-01T00:00:00Z',
+    updated_at: '2026-05-02T00:00:00Z',
     phase: 'tasks-generated',
     approvals: {
       requirements: { generated: true, approved: true },
@@ -162,18 +164,21 @@ describe('buildOverview', () => {
     expect(spec.approvals.tasks).toBe('draft');
     expect(spec.tasksDone).toBe(1);
     expect(spec.tasksTotal).toBe(3);
-    expect(spec.nextLabel).toBe('Review and approve design');
+    expect(spec.nextKind).toBe('review');
+    expect(spec.nextLabel).toBe('Review Design');
+    expect(spec.createdAt).toBe(Date.parse('2026-05-01T00:00:00Z'));
+    expect(spec.updatedAt).toBe(Date.parse('2026-05-02T00:00:00Z'));
     expect(model.kpi.reviews).toBe(1);
     expect(model.kpi.needsYou).toBe(1);
     expect(model.kpi.tasksDone).toBe(1);
     expect(model.kpi.tasksTotal).toBe(3);
     expect(model.columns.attention).toHaveLength(1);
     expect(model.columns.attention[0].source).toBe('review');
-    expect(model.columns.attention[0].label).toBe('Review design');
+    expect(model.columns.attention[0].label).toBe('Review Design');
     expect(model.columns.attention[0].specId).toBe('demo');
   });
 
-  it('counts live workers per spec and sorts active specs first', () => {
+  it('counts live workers per spec and sorts newest specs first', () => {
     const model = buildOverview({
       now: NOW,
       sessions: [session({ id: 's-other', feature: 'other', skill: 'kiro-impl' })],
@@ -186,7 +191,17 @@ describe('buildOverview', () => {
         }),
       ],
       specs: [
-        { record: record({ id: 'draft', spec: { ...record().spec!, feature_name: 'Draft' } }), tasks: '' },
+        {
+          record: record({
+            id: 'draft',
+            spec: {
+              ...record().spec!,
+              feature_name: 'Draft',
+              created_at: '2026-05-03T00:00:00Z',
+            },
+          }),
+          tasks: '',
+        },
         { record: record(), tasks: TASKS },
       ],
     });
@@ -195,9 +210,77 @@ describe('buildOverview', () => {
     const draft = model.specs.find((spec) => spec.id === 'draft');
     expect(demo?.active).toBe(1);
     expect(demo?.attention).toBe(1);
-    expect(model.specs[0].id).toBe('demo');
+    expect(model.specs[0].id).toBe('draft');
     expect(draft).toBeDefined();
     expect(model.kpi.activeSpecs).toBe(1);
+  });
+
+  it('matches the Specs tree next state, including completion', () => {
+    const approvals = {
+      requirements: { generated: true, approved: true },
+      design: { generated: true, approved: true },
+      tasks: { generated: true, approved: true },
+    };
+    const base = record();
+    const model = buildOverview({
+      now: NOW,
+      runs: [],
+      sessions: [],
+      specs: [
+        {
+          record: record({
+            id: 'complete',
+            spec: {
+              ...base.spec!,
+              approvals,
+              ready_for_implementation: true,
+            },
+          }),
+          tasks: ['- [x] 1. Done', '- [x] 2. Done'].join('\n'),
+        },
+        {
+          record: record({
+            id: 'missing-tasks',
+            spec: {
+              ...base.spec!,
+              approvals,
+              ready_for_implementation: true,
+            },
+          }),
+          tasks: '',
+        },
+      ],
+    });
+
+    const complete = model.specs.find((spec) => spec.id === 'complete');
+    expect(complete?.nextKind).toBe('done');
+    expect(complete?.nextLabel).toBeUndefined();
+
+    const missing = model.specs.find((spec) => spec.id === 'missing-tasks');
+    expect(missing?.nextKind).toBe('generate');
+    expect(missing?.nextLabel).toBe('Generate tasks');
+  });
+
+  it('uses the newest spec or artifact timestamp as last updated', () => {
+    const model = buildOverview({
+      now: NOW,
+      runs: [],
+      sessions: [],
+      specs: [
+        {
+          record: record({
+            artifactUpdatedAtMs: {
+              requirements: Date.parse('2026-05-03T00:00:00Z'),
+              design: Date.parse('2026-05-03T12:00:00Z'),
+              tasks: Date.parse('2026-05-04T00:00:00Z'),
+            },
+          }),
+          tasks: TASKS,
+        },
+      ],
+    });
+
+    expect(model.specs[0].updatedAt).toBe(Date.parse('2026-05-04T00:00:00Z'));
   });
 
   it('sums today spend without double counting live sessions', () => {

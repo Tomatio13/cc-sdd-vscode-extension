@@ -396,6 +396,10 @@ ${webviewThemeCss}
       if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
       return Math.floor(diff / 86400000) + 'd ago';
     };
+    const fmtAbsolute = (timestamp) => {
+      if (!timestamp || !isFinite(timestamp)) return '';
+      return new Date(timestamp).toLocaleString();
+    };
 
     const COLUMNS = [
       { key: 'attention', label: 'Needs you', empty: 'Nothing waiting' },
@@ -481,7 +485,11 @@ ${webviewThemeCss}
       if (spec.reviewPhases.length) {
         badges.push('<span class="review">review: ' + esc(spec.reviewPhases.join(', ')) + '</span>');
       }
-      if (spec.ready) badges.push('<span class="ready">ready</span>');
+      if (spec.nextKind === 'implement') {
+        badges.push('<span class="ready">' + (spec.tasksDone > 0 ? 'implementing' : 'ready') + '</span>');
+      } else if (spec.nextKind === 'done') {
+        badges.push('<span class="ready">done</span>');
+      }
       return badges.join('');
     }
 
@@ -490,7 +498,7 @@ ${webviewThemeCss}
       if (spec.attention > 0) return 'attention';
       if (spec.active > 0) return 'running';
       if (spec.reviewPhases.length) return 'review';
-      if (spec.ready) return 'done';
+      if (spec.nextKind === 'done') return 'done';
       return 'off';
     }
 
@@ -513,12 +521,21 @@ ${webviewThemeCss}
       const meta = [];
       meta.push('<span>' + spec.tasksDone + '/' + spec.tasksTotal + ' tasks</span>');
       if (spec.costTodayUsd) meta.push('<span>' + esc(fmtCost(spec.costTodayUsd)) + ' today</span>');
-      if (spec.updatedAt) meta.push('<span>' + esc(timeAgo(spec.updatedAt)) + '</span>');
+      if (spec.updatedAt) {
+        meta.push('<span title="Last updated: ' + esc(fmtAbsolute(spec.updatedAt)) +
+          '">Updated ' + esc(timeAgo(spec.updatedAt)) + '</span>');
+      } else {
+        meta.push('<span>No activity yet</span>');
+      }
       const badges = specBadges(spec);
       if (badges) meta.push(badges);
       html += '<span class="spec-meta">' + meta.join('') + '</span>';
-      html += '<span class="spec-next"><span class="next-label">Next:</span> ' +
-        esc(spec.nextLabel) + (spec.error ? ' · ' + esc(spec.error) : '') + '</span>';
+      if (spec.nextLabel) {
+        html += '<span class="spec-next"><span class="next-label">Next:</span> ' +
+          esc(spec.nextLabel) + (spec.error ? ' · ' + esc(spec.error) : '') + '</span>';
+      } else if (spec.error) {
+        html += '<span class="spec-next">' + esc(spec.error) + '</span>';
+      }
       html += '</button>';
       return html;
     }
@@ -601,7 +618,7 @@ ${webviewThemeCss}
         html += '<section class="portfolio"><div class="section-head">' +
           '<h2 class="section-title">Spec portfolio</h2>' +
           '<span class="section-hint">' + model.specs.length + ' spec' +
-          (model.specs.length === 1 ? '' : 's') + ', needs-you first</span>' +
+          (model.specs.length === 1 ? '' : 's') + ', newest first</span>' +
           '</div><div class="spec-grid">';
         html += model.specs.length
           ? model.specs.map(renderSpec).join('')

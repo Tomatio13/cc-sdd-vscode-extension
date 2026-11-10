@@ -23,12 +23,12 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | cc-sdd のフロー | 拡張での対応 |
 | --- | --- |
 | `/kiro-discovery` | ✅ Specs ビューの 🧭 ボタン / `cc-sdd: Run Discovery`（説明を入力 → 実行。空で Enter なら既存 brief / roadmap からの再開をスキルに任せる） |
-| Steering（product / tech / structure） | ✅ Spec ツリーの Steering ノード。未生成ならクリックで `/kiro-steering` 実行、生成済みならクリックで product.md を開く |
+| Steering（product / tech / structure） | ✅ Spec ツリーの Steering ノード。未生成ならクリックで `/kiro-steering` 実行、生成済みならクリックで product.md を開く。インラインの ⟳ ボタンでいつでも再実行 |
 | `/kiro-spec-init` | ✅ `cc-sdd: New Spec` |
 | `/kiro-spec-requirements` / `design` / `tasks` | ✅ Run Phase（フェーズノードの ▶）。生成物の状態表示とファイルオープン |
 | 承認ゲート | ✅ ✓ Approve / 取消。承認フラグと `ready_for_implementation` のみ書き込む |
 | `/kiro-impl` | ✅ `Continue /kiro-impl` / Run Implementation。進捗は tasks の `[x]` から表示 |
-| `/kiro-validate-impl` | ✅ `Validate implementation` ノード / `cc-sdd: Run Implementation Validation` |
+| `/kiro-validate-impl` | ✅ Implementation 行のインライン盾ボタン / `cc-sdd: Run Implementation Validation` |
 | `/kiro-spec-status` | ✅ `cc-sdd: Show Spec Status`（Markdown レポートを開く） |
 | `/kiro-validate-gap` / `validate-design` | ✅ spec 右クリックから実行 |
 | セッション再開 | ✅ **Sessions** ビュー。現在のワークスペースのセッションだけを一覧（トークン量・推定コスト付き）し、Runs コンソール / ターミナルで resume |
@@ -38,11 +38,11 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 
 ## 何ができるか
 
-- **Spec Explorer** — `.kiro/specs/<feature>` をフェーズと承認状況込みで一覧。roadmap があれば依存順に並べ替え、`deps:` バッジ付き
-- **Steering / Roadmap ノード** — `.kiro/steering/` の生成状況と roadmap.md への入口。roadmap.md は `## Specs (dependency order)` をパースする
+- **Spec Explorer** — `.kiro/specs/<feature>` を Requirements → Design → Tasks → Implementation の番号付きパイプラインとして一覧表示。次アクションを1つに絞り、状態はアイコンと文言で表示。並びは既定で新しい spec が上（`created_at`、なければ `updated_at`）。`ccSdd.specSort: roadmap` にすると roadmap の依存順になります。`deps:` バッジ付き
+- **Steering / Roadmap ノード** — `.kiro/steering/` の生成状況と roadmap.md への入口。生成済みの Steering はインラインの ⟳ ボタンから再実行できる。roadmap.md は `## Specs (dependency order)` をパースする
 - **Approval gates** — 承認前に成果物を検証。必須セクションの欠落や未解決の `{{PLACEHOLDER}}` は承認をブロックし、より軽い問題は明示的な確認が必要
 - **Phase launcher** — `/kiro-spec-requirements`、`/kiro-spec-design`、`/kiro-spec-tasks`、`/kiro-impl`、`/kiro-validate-*` を Claude Code / Codex / Copilot Chat / OpenCode / カスタムコマンド / クリップボードで実行
-- **Overview ボード** — リーダー / PM 向けの監視画面。ライブ run、トランスクリプト末尾が作業中のセッション、spec の承認・タスク進捗をまとめて表示。`Needs you` / `Running` / `Done` / `Failed` の Kanban、当日コスト・タスク KPI、spec ポートフォリオ付き。カードで run を開き、spec カードで `tasks.md` を開く
+- **Overview ボード** — リーダー / PM 向けの監視画面。ライブ run、トランスクリプト末尾が作業中のセッション、spec の承認・タスク進捗をまとめて表示。`Needs you` / `Running` / `Done` / `Failed` の Kanban、当日コスト・タスク KPI、spec ポートフォリオ付き。ポートフォリオは新しい順で、Specs ツリーと同じ next step と最終更新時刻を表示。カードで run を開き、spec カードで `tasks.md` を開く
 - **Task board** — `tasks.md` のチェックボックス、`(P)`、`_Boundary:_`、`_Depends:_`、`_Requirements:_` をツリー表示。エディタを開かずにタスクを切替
 - **Status bar** — アクティブ spec と次のアクションを常時表示。run 実行中は `N waiting · M running` も表示
 - **Auto refresh** — `.kiro/` 配下を監視し、変更時に再読込。フォーカス復帰時と spec 配下の保存時にも再検証
@@ -75,7 +75,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | --- | --- |
 | `cc-sdd: Refresh` | specs と tasks を再読込 |
 | `cc-sdd: Run Discovery` | 説明を入力して `/kiro-discovery` を起動 |
-| `cc-sdd: Run Steering` | `/kiro-steering` を起動（Steering ノードをクリックでも可） |
+| `cc-sdd: Run Steering` | `/kiro-steering` を起動（Steering ノードをクリックでも可。生成済みならインラインの ⟳ ボタンで再実行） |
 | `cc-sdd: Validate against Codebase (Gap)` | 選択中 spec で `/kiro-validate-gap` を起動（spec 右クリック） |
 | `cc-sdd: Validate Design` | `/kiro-validate-design` を起動（spec 右クリック） |
 | `cc-sdd: New Spec` | 説明を入力して `/kiro-spec-init` を起動 |
