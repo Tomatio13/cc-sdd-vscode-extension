@@ -1,7 +1,6 @@
 // Shared surface, type and control tokens for cc-sdd webviews.
-// The Overview board builds its HTML from this string so the window keeps one
-// palette, one type scale and one status lamp. The Runs console keeps its own
-// styles.
+// The Overview portfolio and the Runs console build their HTML from this
+// string so the window keeps one palette, one type scale and one status lamp.
 export const webviewThemeCss = `
 :root {
   color-scheme: light dark;

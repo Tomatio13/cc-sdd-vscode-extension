@@ -2,9 +2,9 @@
 
 A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer for spec-driven development.
 
-- **Specs, Tasks, Sessions** — track phase approvals, next actions, task progress, steering context, and resumable Claude Code sessions from the sidebar.
+- **Specs, Tasks, Sessions** — select a spec, follow its Requirements → Design → Tasks → Implementation → Verification pipeline, run individual or remaining tasks, and resume the matching sessions.
 - **Runs** — stream tool calls, markdown output, and progress in one panel. Answer permission prompts and `AskUserQuestion` there.
-- **Overview** — see waiting workers, live runs, today's spend, and spec progress in one board.
+- **Overview** — a team-facing spec portfolio with stage/run separation, explicit blocks, roadmap dependency candidates, recent updates, and verification-aware completion.
 - **Approval gates** — validate artifacts before recording approvals. Missing sections and unresolved placeholders block approval.
 - **Phase launcher** — run cc-sdd phases in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 

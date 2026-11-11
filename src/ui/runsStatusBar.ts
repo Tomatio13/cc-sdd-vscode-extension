@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 import type { RunState } from '../run/claudeRunner';
 
-/** Small always-on signal for leaders: how many workers need attention. */
-export class OverviewStatusBar implements vscode.Disposable {
+/** Small always-on signal for local runs; click opens the Runs console. */
+export class RunsStatusBar implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-    this.item.name = 'cc-sdd Overview';
-    this.item.command = 'ccSdd.overview';
+    this.item.name = 'cc-sdd Runs';
+    this.item.command = 'ccSdd.runs';
   }
 
   update(runs: RunState[]): void {
@@ -24,11 +24,11 @@ export class OverviewStatusBar implements vscode.Disposable {
       parts.push(`$(bell) ${waiting} waiting`);
     }
     parts.push(`${running} running`);
-    this.item.text = `$(dashboard) ${parts.join(' · ')}`;
+    this.item.text = `$(console) ${parts.join(' · ')}`;
     this.item.tooltip = [
       `Running workers: ${running}`,
       `Waiting for you: ${waiting}`,
-      'Click to open the cc-sdd Overview board.',
+      'Click to open the cc-sdd Runs console.',
     ].join('\n');
     this.item.show();
   }

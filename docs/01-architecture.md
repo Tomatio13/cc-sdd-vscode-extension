@@ -9,14 +9,14 @@
 3. **core は VS Code に依存しない**
    純粋ロジックは `src/core/` に置き、ユニットテスト(vitest)で検証する。`vscode` を import するのは `ui/`・`launch/`・`run/`・`extension.ts` のみ。
 4. **UI はネイティブ優先、ライブ表示とダッシュボードだけ Webview**
-   Specs / Tasks / Sessions は Tree View。Webview は Runs コンソール(ログのストリーミングとリッチ表示)と Overview ボード(KPI / Kanban / ポートフォリオ)の 2 つ。
+   Specs / Tasks / Sessions は Tree View。Webview は Runs コンソール(ログのストリーミングとリッチ表示)と Overview ポートフォリオ(KPI / spec 進捗)の 2 つ。
 
 ## レイヤと依存方向
 
 ```text
 extension.ts  ←  composition root(コマンド登録・監視・DI)
   ├─ ui/         Specs / Tasks / Sessions ツリー、StatusBar、Runs コンソール、
-  │              Overview ボード / Overview ステータスバー
+  │              Overview ポートフォリオ / Runs ステータスバー
   ├─ launch/     runSkill: エージェント別の起動振り分け
   ├─ run/        Claude Agent SDK ランナー(イベント変換・権限コールバック)
   └─ core/       spec / tasks / validation / phases / repository / invocation / sessions / overview
@@ -36,16 +36,17 @@ extension.ts  ←  composition root(コマンド登録・監視・DI)
 | `src/core/repository.ts` | `.kiro` 配下の読み書き(原子的書き込み)、steering / roadmap の解析 |
 | `src/core/invocation.ts` | エージェント別のプロンプト/ターミナルコマンド生成 |
 | `src/core/sessions.ts` | Claude Code セッションの列挙・ヘッド/テイル読取・トランスクリプト変換・活動状態の推定 |
-| `src/core/overview.ts` | Overview の純粋な集約ロジック(`OverviewModel` / KPI / Kanban / spec ポートフォリオ) |
+| `src/core/overview.ts` | Overview の純粋な集約ロジック(`OverviewModel` / KPI / Spec 表 / 依存 / イベント) |
+| `src/core/progress.ts` | Specs / Tasks / Overview 共通の工程・状態・検証・完了判定 |
 | `src/launch/agentLauncher.ts` | `runSkill()`: エージェント別の起動処理とフォールバック |
 | `src/run/claudeRunner.ts` | Claude Agent SDK のラッパー。`RunEvent` / `RunState` / 権限コールバック |
-| `src/ui/specTree.ts` | Specs ツリー(Steering / roadmap / spec / phase / task / 次アクション) |
-| `src/ui/taskTree.ts` | Tasks ツリー |
-| `src/ui/sessionsTree.ts` | Sessions ツリー |
+| `src/ui/specTree.ts` | Specs ツリー(Steering / roadmap / spec / 5 工程 / 次アクション) |
+| `src/ui/taskTree.ts` | Tasks ツリー(選択 Spec の実装・完了・検証) |
+| `src/ui/sessionsTree.ts` | Sessions ツリー(選択 Spec の scope / active / history) |
 | `src/ui/statusBar.ts` | アクティブ spec と次アクションの表示 |
-| `src/ui/overviewStatusBar.ts` | `N waiting · M running` の表示(クリックで Overview) |
+| `src/ui/runsStatusBar.ts` | ローカル run の `N waiting · M running` 表示(クリックで Runs コンソール) |
 | `src/ui/runsConsole.ts` | Runs コンソール(Webview)。パネル管理・HTML/CSS/JS・メッセージ処理 |
-| `src/ui/overviewPanel.ts` | Overview ボード(Webview)。KPI / Kanban / spec ポートフォリオ |
+| `src/ui/overviewPanel.ts` | Overview ポートフォリオ(Webview)。KPI / Spec 表 / 依存 / イベント / 完了セクション |
 | `schemas/spec.schema.json` | `spec.json` の JSON Schema(`jsonValidation` で適用) |
 | `test/` | vitest ユニットテスト(core / runner / sessions / overview) |
 
@@ -60,8 +61,8 @@ sequenceDiagram
   participant Repo as core/repository
   participant Tree as Specs/Tasks/Sessions
   VSCode->>Ext: activate(context)
-  Ext->>Ext: StatusBar / OverviewStatusBar / Providers / RunsConsole を生成
-  Ext->>Ext: OverviewPanel を生成(load は spec / tasks / sessions / runs を集約)
+  Ext->>Ext: StatusBar / RunsStatusBar / Providers / RunsConsole を生成
+  Ext->>Ext: OverviewPanel を生成(load は spec / tasks / validation / roadmap / runs を集約)
   Ext->>Ext: コマンド登録
   Ext->>Repo: listSpecs() / readSteering() / readRoadmap()
   Repo-->>Ext: SpecRecord[]
@@ -84,10 +85,10 @@ sequenceDiagram
 
 Runs の状態変化はファイル監視とは別経路です。`RunsConsole.updateAll()`(80ms 合流)が `onDidChange` を発火し、`extension.ts` が
 
-1. `overviewStatusBar.update(runsConsole.getRuns())`
+1. `runsStatusBar.update(runsConsole.getRuns())`
 2. `overviewPanel.scheduleRefresh()`(350ms デバウンス)
 
-を実行します。Overview の読み込みは spec / tasks / runs を毎回読み、セッション一覧だけ 5 秒キャッシュします。
+を実行します。Overview の読み込みは spec / tasks / validation / roadmap / runs を毎回読みます。
 
 ## ワークスペースの扱い
 
@@ -101,6 +102,5 @@ MVP は**最初のワークスペースフォルダ**のみ対象(`workspaceFold
 | ツリービューを追加 | `package.json` の `contributes.views` + `menus`、`ui/` に Provider、`extension.ts` で `registerTreeDataProvider` |
 | フェーズ/スキルを追加 | `core/spec.ts` の `PHASES`、`core/phases.ts` の `PHASE_META`、`core/validation.ts` |
 | Runs の事後アクションを増やす | `RunsConsoleOptions.getPhaseActions()`、Webview の `renderActions()` |
-| Overview の指標 / カードを増やす | `core/overview.ts` の `buildOverview()`、`ui/overviewPanel.ts` の `renderKpi()` / `renderCard()` / `renderSpec()` |
-| セッションの表示項目を増やす | `core/sessions.ts` の `SessionRecord` / `readSessionHead`、`ui/sessionsTree.ts` |
-| セッションの活動判定を変える | `core/sessions.ts` の `readSessionTailInfo()`(停止マーカー・`AskUserQuestion`・猶予時間) |
+| Overview の指標 / 表 / イベントを増やす | `core/overview.ts` の `buildOverview()`、`ui/overviewPanel.ts` の `renderKpis()` / `renderInProgress()` / `renderEvents()` |
+| セッションの表示項目を増やす | `core/sessions.ts` の `SessionRecord` / `readSessionHead`、`ui/sessionsTree.ts` || セッションの活動判定を変える | `core/sessions.ts` の `readSessionTailInfo()`(停止マーカー・`AskUserQuestion`・猶予時間) |

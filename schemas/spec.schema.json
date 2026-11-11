@@ -50,6 +50,15 @@
     "ready_for_implementation": {
       "type": "boolean",
       "description": "True when all three phases are approved."
+    },
+    "blocked_reason": {
+      "type": "string",
+      "description": "Explicit reason the spec cannot proceed. Overview never infers this from age or past runs."
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Explicit blocking items or upstream specs."
     }
   },
   "additionalProperties": true,

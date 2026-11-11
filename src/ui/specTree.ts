@@ -1,35 +1,45 @@
 import * as vscode from 'vscode';
-import { PHASE_META, nextStepLabel } from '../core/phases';
-import { specCreatedAt, type RoadmapInfo, type SpecRecord, type SteeringStatus } from '../core/repository';
 import {
-  PHASES,
-  nextAction,
-  nextStepState,
-  phaseStatus,
-  type PhaseKey,
-  type PhaseStatus,
-} from '../core/spec';
-import { parseTasks, type ParsedTask } from '../core/tasks';
+  IMPLEMENTATION_SKILL,
+  PHASE_META,
+  VALIDATE_IMPL_SKILL,
+} from '../core/phases';
+import {
+  buildSpecProgress,
+  verificationLabel,
+  type SpecProgress,
+  type Verification,
+} from '../core/progress';
+import {
+  specCreatedAt,
+  type RoadmapInfo,
+  type SpecRecord,
+  type SteeringStatus,
+  type ValidationFile,
+} from '../core/repository';
+import { PHASES, type PhaseKey, type PhaseStatus } from '../core/spec';
+import type { RunState } from '../run/claudeRunner';
 import {
   countLabel,
   phaseStateIcon,
   phaseStateLabel,
-  taskStateIcon,
-  taskStateLabel,
 } from './treeState';
 
-export interface TasksProgress {
-  done: number;
-  total: number;
-  nextId?: string;
-}
-
-type ImplementationState = 'missing-tasks' | 'in-progress' | 'complete';
+type StageKey = PhaseKey | 'implementation' | 'verification';
 
 export type SpecSort = 'newest' | 'roadmap';
 
+interface SpecRunInfo {
+  all: RunState[];
+  active?: RunState;
+  latest?: RunState;
+  running: number;
+  pending: number;
+  latestFailed: boolean;
+}
+
 export type SpecTreeNode =
-  | { kind: 'spec'; record: SpecRecord; deps?: string[]; progress?: TasksProgress }
+  | { kind: 'spec'; record: SpecRecord; deps?: string[]; progress: SpecProgress }
   | { kind: 'steering'; status: SteeringStatus }
   | { kind: 'roadmap'; info: RoadmapInfo }
   | {
@@ -42,39 +52,16 @@ export type SpecTreeNode =
       command?: vscode.Command;
     }
   | {
-      kind: 'phase';
+      kind: 'stage';
       record: SpecRecord;
-      phase: PhaseKey;
-      status: PhaseStatus;
+      progress: SpecProgress;
+      stage: StageKey;
       order: number;
       current: boolean;
-      tasksProgress?: TasksProgress;
+      runs: SpecRunInfo;
     }
-  | {
-      kind: 'implementation';
-      record: SpecRecord;
-      state: ImplementationState;
-      progress?: TasksProgress;
-      nextTask?: ParsedTask;
-      remaining: number;
-    }
-  | { kind: 'task'; record: SpecRecord; task: ParsedTask; remaining: number }
   | { kind: 'message'; label: string; description?: string };
 
-const summarizeTasks = (content: string | undefined): TasksProgress | undefined => {
-  if (content === undefined) {
-    return undefined;
-  }
-  const tasks = parseTasks(content);
-  if (tasks.length === 0) {
-    return undefined;
-  }
-  const done = tasks.filter((task) => task.checked).length;
-  const next = tasks.find((task) => !task.checked);
-  return { done, total: tasks.length, nextId: next?.id };
-};
-
-/** Newest first, matching the Overview portfolio. */
 const compareNewest = (left: SpecRecord, right: SpecRecord): number => {
   const delta = specCreatedAt(right) - specCreatedAt(left);
   if (delta !== 0) {
@@ -102,82 +89,167 @@ const compareRoadmap = (
   return leftIndex - rightIndex;
 };
 
-const approvedCount = (record: SpecRecord): number => {
-  const spec = record.spec;
-  return spec ? PHASES.filter((phase) => spec.approvals[phase].approved).length : 0;
+const approvedCount = (progress: SpecProgress): number =>
+  PHASES.filter((phase) => progress.approvals[phase] === 'approved').length;
+
+const runsForSpec = (record: SpecRecord, runs: RunState[]): SpecRunInfo => {
+  const matching = runs
+    .filter((run) => run.feature === record.id && run.status !== 'preview')
+    .sort((left, right) => right.startedAt - left.startedAt);
+  const pending = matching.filter((run) => run.pending !== undefined);
+  const running = matching.filter(
+    (run) => run.status === 'running' && run.pending === undefined,
+  );
+  const latest = [...matching].sort(
+    (left, right) => (right.endedAt ?? right.startedAt) - (left.endedAt ?? left.startedAt),
+  )[0];
+  return {
+    all: matching,
+    active: pending[0] ?? running[0],
+    latest,
+    running: running.length,
+    pending: pending.length,
+    latestFailed: latest?.status === 'error',
+  };
 };
 
-const nextActionLabel = (record: SpecRecord, progress: TasksProgress | undefined): string | undefined => {
-  if (!record.spec) {
-    return undefined;
-  }
-  return nextStepLabel(nextStepState(record.spec, progress));
-};
+const activeRunOf = (runs: SpecRunInfo, skill: string): RunState | undefined =>
+  runs.all.find(
+    (run) =>
+      run.skill === skill && (run.pending !== undefined || run.status === 'running'),
+  );
 
-/** The single obvious next action, derived from the same state as the steps. */
-const nextStep = (
+const allApproved = (progress: SpecProgress): boolean =>
+  PHASES.every((phase) => progress.approvals[phase] === 'approved');
+
+const nextActionItem = (
   record: SpecRecord,
-  progress: TasksProgress | undefined,
-): {
-  label: string;
-  detail?: string;
-  tooltip?: string;
-  icon: string;
-  command?: vscode.Command;
-} | undefined => {
-  const spec = record.spec;
-  if (!spec) {
+  progress: SpecProgress,
+  runs: SpecRunInfo,
+): Extract<SpecTreeNode, { kind: 'action' }> | undefined => {
+  if (progress.completed || progress.next.kind === 'missing') {
     return undefined;
   }
 
-  const step = nextStepState(spec, progress);
-  const label = nextStepLabel(step);
-  if (!label) {
-    return undefined;
-  }
-
-  if (step.kind === 'generate') {
-    const meta = PHASE_META[step.phase];
+  const next = progress.next;
+  if (next.kind === 'generate') {
     return {
-      label: `Next: ${label}`,
-      detail: step.phase === 'tasks' && !progress ? 'tasks.md missing' : `/${meta.skill}`,
+      kind: 'action',
+      record,
+      label: `Next: ${next.label}`,
+      detail: next.detail,
       icon: 'play',
-      command: {
-        command: 'ccSdd.runPhase',
-        title: 'Run Phase',
-        arguments: [{ record, phase: step.phase }],
-      },
+      command: next.phase
+        ? {
+            command: 'ccSdd.runPhase',
+            title: 'Run Phase',
+            arguments: [{ record, phase: next.phase }],
+          }
+        : undefined,
     };
   }
 
-  if (step.kind === 'review') {
-    const meta = PHASE_META[step.phase];
-    // Reviewing should open the artifact; approval stays on the step's inline button.
+  if (next.kind === 'review' && next.phase) {
+    const meta = PHASE_META[next.phase];
     return {
-      label: `Next: ${label}`,
-      detail: meta.file,
-      tooltip: `Open ${meta.file}, then approve it from the check button on step ${
-        PHASES.indexOf(step.phase) + 1
-      }.`,
+      kind: 'action',
+      record,
+      label: `Next: ${next.label}`,
+      detail: next.detail,
       icon: 'eye',
+      tooltip: `Open ${meta.file}, then approve it from the check button on step ${PHASES.indexOf(
+        next.phase,
+      ) + 1}.`,
       command: {
         command: 'ccSdd.openArtifact',
         title: 'Open Artifact',
-        arguments: [{ record, phase: step.phase }],
+        arguments: [{ record, phase: next.phase }],
       },
     };
   }
 
-  if (step.kind === 'implement') {
+  if (next.kind === 'implement') {
+    const implementationRun = activeRunOf(runs, IMPLEMENTATION_SKILL);
+    if (implementationRun) {
+      return {
+        kind: 'action',
+        record,
+        label: 'Next: Open run',
+        detail: implementationRun.pending ? 'Input waiting' : 'Running',
+        icon: implementationRun.pending ? 'bell' : 'play',
+        command: {
+          command: 'ccSdd.openSpecRun',
+          title: 'Open Run',
+          arguments: [record],
+        },
+      };
+    }
     return {
-      label: `Next: ${label}`,
-      detail: progress
-        ? `${countLabel(progress.total - progress.done, 'task')} left`
-        : undefined,
+      kind: 'action',
+      record,
+      label: `Next: ${next.label}`,
+      detail: runs.latestFailed
+        ? 'Last run failed; review and restart'
+        : `${countLabel(progress.tasksTotal - progress.tasksDone, 'task')} left`,
       icon: 'play',
       command: {
         command: 'ccSdd.runImpl',
         title: 'Run Implementation',
+        arguments: [record],
+      },
+    };
+  }
+
+  if (next.kind === 'verify') {
+    const validationRun = activeRunOf(runs, VALIDATE_IMPL_SKILL);
+    if (validationRun) {
+      return {
+        kind: 'action',
+        record,
+        label: 'Next: Open verification run',
+        detail: validationRun.pending ? 'Input waiting' : 'Running',
+        icon: validationRun.pending ? 'bell' : 'shield',
+        command: {
+          command: 'ccSdd.openSpecRun',
+          title: 'Open Run',
+          arguments: [record],
+        },
+      };
+    }
+    const start = next.label === 'Start verification' || next.label === 'Revalidate';
+    return {
+      kind: 'action',
+      record,
+      label: `Next: ${next.label}`,
+      detail: start ? 'impl-validation.md' : 'Open report',
+      icon: start ? 'shield' : 'file',
+      tooltip: start
+        ? 'Run implementation validation and record the result in impl-validation.md.'
+        : 'Open the recorded implementation validation report.',
+      command: start
+        ? {
+            command: 'ccSdd.runValidateImpl',
+            title: 'Run Implementation Validation',
+            arguments: [record],
+          }
+        : {
+            command: 'ccSdd.openValidation',
+            title: 'Open Validation',
+            arguments: [record],
+          },
+    };
+  }
+
+  if (next.kind === 'done') {
+    return {
+      kind: 'action',
+      record,
+      label: `Next: ${next.label}`,
+      detail: 'impl-validation.md',
+      icon: 'file',
+      command: {
+        command: 'ccSdd.openValidation',
+        title: 'Open Validation',
         arguments: [record],
       },
     };
@@ -188,77 +260,90 @@ const nextStep = (
 
 const specIcon = (
   record: SpecRecord,
-  progress: TasksProgress | undefined,
+  progress: SpecProgress,
+  runs: SpecRunInfo,
 ): vscode.ThemeIcon => {
-  const spec = record.spec;
-  if (!spec) {
+  if (record.specError) {
     return new vscode.ThemeIcon('warning');
   }
-  const action = nextAction(spec);
-  if (action.kind === 'implement') {
-    if (!progress) {
+  if (progress.completed) {
+    return new vscode.ThemeIcon('pass-filled');
+  }
+  if (progress.stage === 'verification') {
+    if (activeRunOf(runs, VALIDATE_IMPL_SKILL)) {
+      return new vscode.ThemeIcon('sync');
+    }
+    if (progress.verification.status === 'failed') {
+      return new vscode.ThemeIcon('error');
+    }
+    if (progress.verification.status === 'verified') {
+      return new vscode.ThemeIcon('pass-filled');
+    }
+    return new vscode.ThemeIcon('clock');
+  }
+  if (progress.stage === 'implementation') {
+    if (progress.tasksTotal === 0) {
       return new vscode.ThemeIcon('warning');
     }
-    return new vscode.ThemeIcon(progress.done >= progress.total ? 'pass-filled' : 'rocket');
+    return new vscode.ThemeIcon(
+      activeRunOf(runs, IMPLEMENTATION_SKILL) ? 'rocket' : 'circle-outline',
+    );
   }
-  return new vscode.ThemeIcon(action.kind === 'review' ? 'clock' : 'circle-outline');
+  if (progress.reviewPhases.length > 0) {
+    return new vscode.ThemeIcon('clock');
+  }
+  if (progress.stage === 'requirements' || progress.stage === 'design' || progress.stage === 'tasks') {
+    return new vscode.ThemeIcon('circle-outline');
+  }
+  return new vscode.ThemeIcon('warning');
 };
 
 const specDescription = (
-  record: SpecRecord,
   active: boolean,
-  progress: TasksProgress | undefined,
+  progress: SpecProgress,
+  runs: SpecRunInfo,
 ): string => {
   const parts: string[] = [];
   if (active) {
     parts.push('active');
   }
-
-  const spec = record.spec;
-  if (!spec) {
-    parts.push(record.specError ? 'spec.json invalid' : 'spec.json missing');
-    return parts.join(' · ');
-  }
-
-  const approved = `${approvedCount(record)}/3 approved`;
-  const action = nextAction(spec);
-  if (action.kind === 'implement') {
-    if (!progress) {
-      parts.push(approved, 'tasks missing');
-    } else if (progress.done >= progress.total) {
-      parts.push('done', `${progress.done}/${progress.total} tasks`);
-    } else {
-      parts.push(approved, `${progress.done}/${progress.total} tasks`);
+  parts.push(progress.stateLabel);
+  if (progress.stage === 'verification') {
+    const validationRun = activeRunOf(runs, VALIDATE_IMPL_SKILL);
+    if (validationRun) {
+      parts.push(validationRun.pending ? 'Input waiting' : 'Running');
     }
-  } else {
-    parts.push(approved, `next: ${PHASE_META[action.phase].label}`);
   }
-
+  if (progress.stage === 'implementation') {
+    const implementationRun = activeRunOf(runs, IMPLEMENTATION_SKILL);
+    if (implementationRun) {
+      parts.push(implementationRun.pending ? 'Input waiting' : 'Running');
+    }
+  }
   return parts.join(' · ');
 };
 
 const specItem = (
-  record: SpecRecord,
+  node: Extract<SpecTreeNode, { kind: 'spec' }>,
   active: boolean,
-  deps: string[] | undefined,
-  progress: TasksProgress | undefined,
+  runs: SpecRunInfo,
 ): vscode.TreeItem => {
-  const spec = record.spec;
-  const complete = progress !== undefined && progress.done >= progress.total;
-  const label = spec?.feature_name?.trim() || record.id;
-
+  const { record, progress } = node;
+  const label = record.spec?.feature_name?.trim() || record.id;
   const item = new vscode.TreeItem(
     label,
-    complete ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+    progress.completed
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.Expanded,
   );
   item.id = `spec:${record.id}`;
-  item.contextValue = complete
+  item.contextValue = progress.completed
     ? 'spec-complete'
-    : spec && nextAction(spec).kind === 'implement'
-      ? 'spec-ready'
+    : progress.stage === 'implementation'
+      ? 'spec-implementing'
       : 'spec';
-  item.description = specDescription(record, active, progress);
-  item.iconPath = specIcon(record, progress);
+  item.description = specDescription(active, progress, runs);
+  item.iconPath = specIcon(record, progress, runs);
   item.command = {
     command: 'ccSdd.selectSpec',
     title: 'Select Spec',
@@ -269,34 +354,35 @@ const specItem = (
   tooltip.supportThemeIcons = true;
   tooltip.appendMarkdown(`**${label}**\n\n`);
   tooltip.appendMarkdown(`Path: \`${record.dir}\`\n\n`);
-  if (deps && deps.length > 0) {
-    tooltip.appendMarkdown(`After: ${deps.join(', ')}\n\n`);
+  if (node.deps && node.deps.length > 0) {
+    tooltip.appendMarkdown(`After: ${node.deps.join(', ')}\n\n`);
   }
-  if (spec) {
-    const next = nextActionLabel(record, progress);
-    if (next) {
-      tooltip.appendMarkdown(`Next: ${next}\n\n`);
-    }
-    tooltip.appendMarkdown(
-      `Steps: ${PHASES.map((phase) => {
-        const approval = spec.approvals[phase];
-        const mark = approval.approved
+  tooltip.appendMarkdown(`Stage: ${progress.stageLabel}\n\n`);
+  tooltip.appendMarkdown(`State: ${progress.stateLabel}\n\n`);
+  tooltip.appendMarkdown(`Next: ${progress.next.label}\n\n`);
+  tooltip.appendMarkdown(
+    `Steps: ${PHASES.map((phase) => {
+      const status = progress.approvals[phase];
+      const mark =
+        status === 'approved'
           ? '$(pass-filled)'
-          : approval.generated
+          : status === 'generated'
             ? '$(clock)'
             : '$(circle-outline)';
-        return `${mark} ${PHASE_META[phase].label}`;
-      }).join('  ')}\n\n`,
-    );
-    if (progress) {
-      tooltip.appendMarkdown(`Tasks: ${progress.done}/${progress.total} done\n\n`);
-    }
+      return `${mark} ${PHASE_META[phase].label}`;
+    }).join('  ')}\n\n`,
+  );
+  tooltip.appendMarkdown(
+    `Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks\n\n`,
+  );
+  tooltip.appendMarkdown(`Verification: ${verificationLabel(progress.verification)}\n\n`);
+  if (progress.verification.detail) {
+    tooltip.appendMarkdown(`${progress.verification.detail}\n\n`);
   }
   if (record.specError) {
     tooltip.appendMarkdown(`$(error) ${record.specError}\n`);
   }
   item.tooltip = tooltip;
-
   return item;
 };
 
@@ -310,37 +396,32 @@ const phaseIcon = (status: PhaseStatus, current: boolean): vscode.ThemeIcon => {
   return new vscode.ThemeIcon(phaseStateIcon(status));
 };
 
-const phaseItem = (
-  record: SpecRecord,
+const phaseStageItem = (
+  node: Extract<SpecTreeNode, { kind: 'stage' }>,
   phase: PhaseKey,
-  status: PhaseStatus,
-  order: number,
-  current: boolean,
-  tasksProgress?: TasksProgress,
 ): vscode.TreeItem => {
+  const { record, progress, order, current } = node;
   const meta = PHASE_META[phase];
+  const status = progress.approvals[phase];
   const item = new vscode.TreeItem(`${order}. ${meta.label}`, vscode.TreeItemCollapsibleState.None);
-  item.id = `phase:${record.id}:${phase}`;
+  item.id = `stage:${record.id}:${phase}`;
   item.contextValue = `phase-${status}`;
-  item.description = tasksProgress
-    ? `${tasksProgress.done}/${tasksProgress.total} done`
-    : phaseStateLabel(status);
+  item.description =
+    phase === 'tasks' && progress.tasksTotal > 0
+      ? `${progress.tasksDone}/${progress.tasksTotal} done`
+      : phaseStateLabel(status);
   item.iconPath = phaseIcon(status, current);
 
   const details = [
-    `Step ${order} of ${PHASES.length} · ${meta.description}`,
-    `Status: ${phaseStateLabel(status)}${current ? ' (next)' : ''}`,
+    `Step ${order} · ${meta.description}`,
+    `Status: ${phaseStateLabel(status)}${current ? ' (current)' : ''}`,
     record.artifacts[phase],
     `Skill: /${meta.skill}`,
   ];
-  if (tasksProgress) {
-    details.push(`Progress: ${tasksProgress.done}/${tasksProgress.total} done`);
-    if (tasksProgress.nextId) {
-      details.push(`Next task: ${tasksProgress.nextId}`);
-    }
+  if (phase === 'tasks' && progress.tasksTotal > 0) {
+    details.push(`Progress: ${progress.tasksDone}/${progress.tasksTotal} done`);
   }
   item.tooltip = details.join('\n\n');
-
   item.command =
     status === 'missing'
       ? { command: 'ccSdd.runPhase', title: 'Run Phase', arguments: [{ record, phase }] }
@@ -348,98 +429,200 @@ const phaseItem = (
   return item;
 };
 
-const implementationItem = (node: Extract<SpecTreeNode, { kind: 'implementation' }>): vscode.TreeItem => {
-  const { record, state, progress, nextTask, remaining } = node;
-  const collapsible = nextTask
-    ? vscode.TreeItemCollapsibleState.Collapsed
-    : vscode.TreeItemCollapsibleState.None;
+const implementationStageItem = (
+  node: Extract<SpecTreeNode, { kind: 'stage' }>,
+): vscode.TreeItem => {
+  const { record, progress, current, runs } = node;
+  const item = new vscode.TreeItem('4. Implementation', vscode.TreeItemCollapsibleState.None);
+  item.id = `stage:${record.id}:implementation`;
 
-  const item = new vscode.TreeItem('4. Implementation', collapsible);
-  item.id = `implementation:${record.id}`;
-  item.contextValue = `impl-${state}`;
+  if (!allApproved(progress)) {
+    item.description = 'waiting for approvals';
+    item.contextValue = 'impl-waiting';
+    item.iconPath = new vscode.ThemeIcon('circle-slash');
+    item.tooltip = 'Implementation starts after Requirements, Design, and Tasks are approved.';
+    return item;
+  }
 
-  if (state === 'missing-tasks') {
+  if (progress.tasksTotal === 0) {
     item.description = 'tasks.md missing';
+    item.contextValue = 'impl-missing-tasks';
     item.iconPath = new vscode.ThemeIcon('warning');
-  } else if (!progress || state === 'complete') {
-    item.description = progress ? `${progress.done}/${progress.total} done` : 'complete';
-    item.iconPath = new vscode.ThemeIcon('pass-filled');
-  } else {
-    item.description = `${progress.done}/${progress.total} done`;
-    item.iconPath = new vscode.ThemeIcon('rocket');
-  }
-
-  const details = ['Step 4 · implementation after all phases are approved'];
-  if (progress) {
-    details.push(`Progress: ${progress.done}/${progress.total} done`);
-  }
-  if (nextTask) {
-    details.push(`Next task: ${nextTask.id}. ${nextTask.title}`);
-    details.push(`Remaining: ${countLabel(remaining, 'task')}`);
-    details.push('Expand to open the next task.');
-  } else if (state === 'complete') {
-    details.push('Validation is an optional quality gate; run it from the inline button or context menu.');
-  }
-  item.tooltip = details.join('\n\n');
-
-  if (state === 'missing-tasks') {
+    item.tooltip = 'tasks.md has no tasks. Create tasks before implementation.';
     item.command = {
       command: 'ccSdd.runPhase',
       title: 'Run Phase',
       arguments: [{ record, phase: 'tasks' as PhaseKey }],
     };
-  } else if (state === 'complete') {
-    item.command = {
-      command: 'ccSdd.openArtifact',
-      title: 'Open Artifact',
-      arguments: [{ record, phase: 'tasks' as PhaseKey }],
-    };
+    return item;
   }
 
+  const nextTask = progress.tasks.find((task) => !task.checked);
+  const implementationRun = activeRunOf(runs, IMPLEMENTATION_SKILL);
+  item.description = `${progress.tasksDone}/${progress.tasksTotal} done`;
+  item.tooltip = [
+    'Step 4 · implementation',
+    `Progress: ${progress.tasksDone}/${progress.tasksTotal} done`,
+    nextTask ? `Next task: ${nextTask.id}. ${nextTask.title}` : 'All tasks are complete.',
+    implementationRun
+      ? `Run: ${implementationRun.pending ? 'Input waiting' : 'Running'}`
+      : 'No active implementation run in this window.',
+  ].join('\n\n');
+
+  if (progress.implementationComplete) {
+    item.contextValue = 'impl-complete';
+    item.iconPath = new vscode.ThemeIcon('pass-filled');
+    item.command = {
+      command: 'ccSdd.openArtifact',
+      title: 'Open Tasks',
+      arguments: [{ record, phase: 'tasks' as PhaseKey }],
+    };
+    return item;
+  }
+
+  if (implementationRun) {
+    item.contextValue = 'impl-running';
+    item.iconPath = new vscode.ThemeIcon('sync');
+  } else {
+    item.contextValue = 'impl-in-progress';
+    item.iconPath = new vscode.ThemeIcon(current ? 'arrow-circle-right' : 'rocket');
+  }
+  item.command = nextTask
+    ? {
+        command: 'ccSdd.openTask',
+        title: 'Open Task',
+        arguments: [{ record, task: nextTask }],
+      }
+    : {
+        command: 'ccSdd.openArtifact',
+        title: 'Open Tasks',
+        arguments: [{ record, phase: 'tasks' as PhaseKey }],
+      };
   return item;
 };
 
-const taskItem = (record: SpecRecord, task: ParsedTask, remaining: number): vscode.TreeItem => {
-  const item = new vscode.TreeItem(
-    `Next: ${task.id}. ${task.title}`,
-    vscode.TreeItemCollapsibleState.None,
-  );
-  item.id = `task:${record.id}:${task.line}:${task.id}`;
-  item.contextValue = task.checked ? 'task-done' : 'task-todo';
-  item.iconPath = new vscode.ThemeIcon(taskStateIcon(task.checked));
+const verificationStatusDescription = (verification: Verification): string => {
+  switch (verification.status) {
+    case 'verified':
+      return 'success (GO)';
+    case 'failed':
+      return `failed (${verification.decision ?? 'NO-GO'})`;
+    case 'stale':
+      return 'stale result';
+    case 'manual':
+      return 'manual required';
+    case 'unconfirmed':
+      return 'result unconfirmed';
+    case 'error':
+      return 'result unavailable';
+    case 'none':
+      return 'not run';
+  }
+};
 
-  const description = [`${countLabel(remaining, 'task')} left`];
-  if (task.parallel) {
-    description.push('parallel');
-  }
-  item.description = description.join(' · ');
-  item.command = {
-    command: 'ccSdd.openTask',
-    title: 'Open Task',
-    arguments: [{ record, task }],
-  };
+const verificationStageItem = (
+  node: Extract<SpecTreeNode, { kind: 'stage' }>,
+): vscode.TreeItem => {
+  const { record, progress, current } = node;
+  const verification = progress.verification;
+  const item = new vscode.TreeItem('5. Verification', vscode.TreeItemCollapsibleState.None);
+  item.id = `stage:${record.id}:verification`;
 
-  const tooltip = new vscode.MarkdownString();
-  tooltip.supportThemeIcons = true;
-  tooltip.appendMarkdown(`**${task.id}. ${task.title}**\n\n`);
-  tooltip.appendMarkdown(`Open in tasks.md at line ${task.line + 1}.\n\n`);
-  if (task.parallel) {
-    tooltip.appendMarkdown('Parallel task\n\n');
+  if (!progress.implementationComplete) {
+    item.description = 'waiting for implementation';
+    item.contextValue = 'verification-waiting';
+    item.iconPath = new vscode.ThemeIcon('circle-slash');
+    item.tooltip = 'Verification starts after all implementation tasks are complete.';
+    return item;
   }
-  if (task.boundary) {
-    tooltip.appendMarkdown(`Boundary: \`${task.boundary}\`\n\n`);
+
+  item.description = verificationStatusDescription(verification);
+  item.contextValue = `verification-${verification.status}`;
+
+  const validationRun = activeRunOf(node.runs, VALIDATE_IMPL_SKILL);
+  if (validationRun) {
+    item.description = validationRun.pending ? 'input waiting' : 'running';
+    item.contextValue = 'verification-running';
+    item.iconPath = new vscode.ThemeIcon(validationRun.pending ? 'bell' : 'sync');
+    item.command = {
+      command: 'ccSdd.openSpecRun',
+      title: 'Open Run',
+      arguments: [record],
+    };
+    item.tooltip = [
+      'Step 5 · verification',
+      `Run: ${validationRun.pending ? 'Input waiting' : 'Running'}`,
+      record.validationPath,
+    ].join('\n\n');
+    return item;
   }
-  if (task.depends.length > 0) {
-    tooltip.appendMarkdown(`Depends: \`${task.depends.join(', ')}\`\n\n`);
+
+  if (verification.status === 'verified') {
+    item.iconPath = new vscode.ThemeIcon('pass-filled');
+    item.command = {
+      command: 'ccSdd.openValidation',
+      title: 'Open Validation',
+      arguments: [record],
+    };
+  } else if (verification.status === 'failed') {
+    item.iconPath = new vscode.ThemeIcon('error');
+    item.command = {
+      command: 'ccSdd.openValidation',
+      title: 'Open Validation',
+      arguments: [record],
+    };
+  } else if (verification.status === 'none') {
+    item.iconPath = new vscode.ThemeIcon(current ? 'arrow-circle-right' : 'circle-outline');
+    item.command = {
+      command: 'ccSdd.runValidateImpl',
+      title: 'Run Implementation Validation',
+      arguments: [record],
+    };
+  } else {
+    item.iconPath = new vscode.ThemeIcon('warning');
+    item.command = record.validationExists
+      ? {
+          command: 'ccSdd.openValidation',
+          title: 'Open Validation',
+          arguments: [record],
+        }
+      : {
+          command: 'ccSdd.runValidateImpl',
+          title: 'Run Implementation Validation',
+          arguments: [record],
+        };
   }
-  if (task.requirements.length > 0) {
-    tooltip.appendMarkdown(`Requirements: \`${task.requirements.join(', ')}\`\n\n`);
+
+  const details = [
+    `Step 5 · verification`,
+    `Status: ${verificationLabel(verification)}`,
+    record.validationPath,
+  ];
+  if (verification.at) {
+    details.push(`Recorded: ${new Date(verification.at).toLocaleString()}`);
   }
-  tooltip.appendMarkdown(
-    `${task.checked ? '$(pass-filled)' : '$(circle-outline)'} ${taskStateLabel(task.checked)}`,
-  );
-  item.tooltip = tooltip;
+  if (verification.detail) {
+    details.push(verification.detail);
+  }
+  if (verification.items.length > 0) {
+    details.push(
+      ['Checks:', ...verification.items.map((check) => `- ${check.label}: ${check.value}`)].join('\n'),
+    );
+  } else {
+    details.push('No itemized verification checks recorded.');
+  }
+  item.tooltip = details.join('\n\n');
   return item;
+};
+
+const stageItem = (node: Extract<SpecTreeNode, { kind: 'stage' }>): vscode.TreeItem => {
+  if (node.stage === 'implementation') {
+    return implementationStageItem(node);
+  }
+  if (node.stage === 'verification') {
+    return verificationStageItem(node);
+  }
+  return phaseStageItem(node, node.stage);
 };
 
 const steeringItem = (status: SteeringStatus): vscode.TreeItem => {
@@ -456,7 +639,6 @@ const steeringItem = (status: SteeringStatus): vscode.TreeItem => {
   } else {
     item.description = 'not started';
   }
-  // Keep steering visually distinct from specs.
   item.iconPath = new vscode.ThemeIcon('globe');
   item.tooltip = [
     'Project context for spec generation (product, tech, structure).',
@@ -500,6 +682,8 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
       record: SpecRecord,
       phase: PhaseKey,
     ) => Promise<string | undefined>,
+    private readonly readValidation: (record: SpecRecord) => Promise<ValidationFile>,
+    private readonly getRuns: () => RunState[],
     private readonly workspaceInfo: () => Promise<{
       steering: SteeringStatus;
       roadmap: RoadmapInfo | undefined;
@@ -522,10 +706,14 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
   async getChildren(element?: SpecTreeNode): Promise<SpecTreeNode[]> {
     if (!element) {
       const [records, info] = await Promise.all([this.load(), this.workspaceInfo()]);
-      const progress = new Map<string, TasksProgress | undefined>();
+      const progress = new Map<string, SpecProgress>();
       await Promise.all(
         records.map(async (record) => {
-          progress.set(record.id, summarizeTasks(await this.readArtifact(record, 'tasks')));
+          const [tasks, validation] = await Promise.all([
+            this.readArtifact(record, 'tasks'),
+            this.readValidation(record),
+          ]);
+          progress.set(record.id, buildSpecProgress(record, tasks, validation));
         }),
       );
 
@@ -535,8 +723,6 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
         nodes.push({ kind: 'roadmap', info: roadmap });
       }
 
-      // Default: newest spec first. Roadmap order is opt-in because dependency
-      // order and recency answer different questions.
       const sorted =
         this.getSort() === 'roadmap' && roadmap
           ? [...records].sort((left, right) => compareRoadmap(roadmap, left, right))
@@ -547,11 +733,10 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
           kind: 'spec',
           record,
           deps: roadmap?.deps[record.id],
-          progress: progress.get(record.id),
+          progress: progress.get(record.id) as SpecProgress,
         });
       }
 
-      // Steering は Workspace 共通の文脈のため常に先頭。未生成なら目立たせる。
       nodes.unshift({ kind: 'steering', status: info.steering });
       return nodes;
     }
@@ -560,26 +745,13 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
       return this.buildBody(element.record);
     }
 
-    if (element.kind === 'implementation') {
-      return element.nextTask
-        ? [
-            {
-              kind: 'task',
-              record: element.record,
-              task: element.nextTask,
-              remaining: element.remaining,
-            },
-          ]
-        : [];
-    }
-
     return [];
   }
 
   getTreeItem(node: SpecTreeNode): vscode.TreeItem {
     switch (node.kind) {
       case 'spec':
-        return specItem(node.record, this.activeId === node.record.id, node.deps, node.progress);
+        return specItem(node, this.activeId === node.record.id, runsForSpec(node.record, this.getRuns()));
       case 'steering':
         return steeringItem(node.status);
       case 'roadmap':
@@ -597,19 +769,8 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
         item.tooltip = node.tooltip ?? (node.detail ? `${node.label}\n\n${node.detail}` : node.label);
         return item;
       }
-      case 'phase':
-        return phaseItem(
-          node.record,
-          node.phase,
-          node.status,
-          node.order,
-          node.current,
-          node.tasksProgress,
-        );
-      case 'implementation':
-        return implementationItem(node);
-      case 'task':
-        return taskItem(node.record, node.task, node.remaining);
+      case 'stage':
+        return stageItem(node);
       case 'message': {
         const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
         item.description = node.description;
@@ -620,8 +781,7 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
   }
 
   private async buildBody(record: SpecRecord): Promise<SpecTreeNode[]> {
-    const spec = record.spec;
-    if (!spec) {
+    if (!record.spec) {
       return [
         {
           kind: 'message',
@@ -631,61 +791,48 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
       ];
     }
 
+    const [tasks, validation] = await Promise.all([
+      this.readArtifact(record, 'tasks'),
+      this.readValidation(record),
+    ]);
+    const progress = buildSpecProgress(record, tasks, validation);
+    const runs = runsForSpec(record, this.getRuns());
     const nodes: SpecTreeNode[] = [];
-    const action = nextAction(spec);
-    const tasksContent = await this.readArtifact(record, 'tasks');
-    const tasks = parseTasks(tasksContent ?? '');
-    const done = tasks.filter((task) => task.checked).length;
-    const progress: TasksProgress | undefined =
-      tasks.length > 0
-        ? {
-            done,
-            total: tasks.length,
-            nextId: tasks.find((task) => !task.checked)?.id,
-          }
-        : undefined;
 
-    // 1. One explicit next action, so the tree always answers "what now?".
-    const next = nextStep(record, progress);
+    const next = nextActionItem(record, progress, runs);
     if (next) {
-      nodes.push({ kind: 'action', record, ...next });
+      nodes.push(next);
     }
 
-    // 2. The pipeline in chronological order: Requirements -> Design -> Tasks.
-    const currentPhase = action.kind === 'implement' ? undefined : action.phase;
     PHASES.forEach((phase, index) => {
       nodes.push({
-        kind: 'phase',
+        kind: 'stage',
         record,
-        phase,
-        status: phaseStatus(spec, phase, record.exists[phase]),
+        progress,
+        stage: phase,
         order: index + 1,
-        current: phase === currentPhase,
-        tasksProgress: phase === 'tasks' ? progress : undefined,
+        current: progress.stage === phase,
+        runs,
       });
     });
-
-    // 3. Implementation is a fourth step once every phase is approved.
-    if (action.kind === 'implement') {
-      if (!progress) {
-        nodes.push({
-          kind: 'implementation',
-          record,
-          state: 'missing-tasks',
-          remaining: 0,
-        });
-      } else {
-        const nextTask = tasks.find((task) => !task.checked);
-        nodes.push({
-          kind: 'implementation',
-          record,
-          state: nextTask ? 'in-progress' : 'complete',
-          progress,
-          nextTask,
-          remaining: tasks.length - done,
-        });
-      }
-    }
+    nodes.push({
+      kind: 'stage',
+      record,
+      progress,
+      stage: 'implementation',
+      order: 4,
+      current: progress.stage === 'implementation',
+      runs,
+    });
+    nodes.push({
+      kind: 'stage',
+      record,
+      progress,
+      stage: 'verification',
+      order: 5,
+      current: progress.stage === 'verification',
+      runs,
+    });
 
     return nodes;
   }

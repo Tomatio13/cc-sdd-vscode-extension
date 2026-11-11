@@ -41,6 +41,12 @@ describe('buildInvocation', () => {
     expect(buildInvocation(config('clipboard'), 'kiro-impl', 'alpha').command).toBeUndefined();
   });
 
+  it('appends task args after the feature', () => {
+    const invocation = buildInvocation(config('claude'), 'kiro-impl', 'alpha', '1.1 1.2');
+    expect(invocation.prompt).toBe('/kiro-impl alpha 1.1 1.2');
+    expect(invocation.command).toBe('claude "/kiro-impl alpha 1.1 1.2"');
+  });
+
   it('expands a custom command template', () => {
     const invocation = buildInvocation(
       config('custom', 'agent --skill "${skill}" --feature "${feature}" -- "${prompt}"'),

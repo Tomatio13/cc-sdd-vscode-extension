@@ -1,33 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { buildOverview, ACTIVE_SESSION_MS } from '../src/core/overview';
-import type { SpecRecord } from '../src/core/repository';
-import type { SessionRecord } from '../src/core/sessions';
+import { buildOverview } from '../src/core/overview';
+import type { RoadmapInfo, SpecRecord } from '../src/core/repository';
+import type { SpecJson } from '../src/core/spec';
 import type { RunState } from '../src/run/claudeRunner';
 
-const NOW = new Date('2026-06-01T12:00:00Z').getTime();
+const NOW = Date.parse('2026-06-01T12:00:00Z');
 
-const run = (overrides: Partial<RunState>): RunState => ({
-  id: 'run-1',
-  skill: 'kiro-impl',
-  feature: 'demo',
-  prompt: '/kiro-impl demo',
-  permissionMode: 'acceptEdits',
-  status: 'running',
-  segments: [],
-  startedAt: NOW - 60_000,
-  ...overrides,
-});
+const ALL_APPROVED = {
+  requirements: { generated: true, approved: true },
+  design: { generated: true, approved: true },
+  tasks: { generated: true, approved: true },
+};
 
-const session = (overrides: Partial<SessionRecord>): SessionRecord => ({
-  id: 'session-1',
-  title: '/kiro-impl demo',
-  skill: 'kiro-impl',
-  feature: 'demo',
-  updatedAt: NOW - 1000,
-  sizeBytes: 100,
-  filePath: '/tmp/session-1.jsonl',
-  ...overrides,
-});
+const tasks = (done: number, total: number): string =>
+  Array.from({ length: total }, (_, index) => {
+    const checked = index < done ? 'x' : ' ';
+    return `- [${checked}] ${index + 1}. Task ${index + 1}`;
+  }).join('\n');
 
 const record = (overrides: Partial<SpecRecord> = {}): SpecRecord => ({
   id: 'demo',
@@ -39,6 +28,8 @@ const record = (overrides: Partial<SpecRecord> = {}): SpecRecord => ({
     tasks: '/tmp/specs/demo/tasks.md',
   },
   exists: { requirements: true, design: true, tasks: true },
+  validationPath: '/tmp/specs/demo/impl-validation.md',
+  validationExists: false,
   spec: {
     feature_name: 'Demo feature',
     created_at: '2026-05-01T00:00:00Z',
@@ -54,268 +45,483 @@ const record = (overrides: Partial<SpecRecord> = {}): SpecRecord => ({
   ...overrides,
 });
 
-const TASKS = [
-  '# Tasks',
-  '',
-  '- [x] 1. Done task',
-  '- [ ] 2. Todo task',
-  '  - _Depends:_ 1',
-  '- [ ] 3. Another todo',
-].join('\n');
+const specWith = (
+  spec: Partial<SpecJson>,
+  recordOverrides: Partial<SpecRecord> = {},
+): SpecRecord =>
+  record({
+    ...recordOverrides,
+    spec: { ...record().spec!, ...spec },
+  });
+
+const implemented = (
+  spec: Partial<SpecJson> = {},
+  recordOverrides: Partial<SpecRecord> = {},
+): SpecRecord =>
+  specWith(
+    { approvals: ALL_APPROVED, ready_for_implementation: true, ...spec },
+    recordOverrides,
+  );
+
+const completedRecord = (
+  id: string,
+  validationAt: number,
+  contentAt: number,
+  decision: 'GO' | 'NO-GO' | 'MANUAL_VERIFY_REQUIRED' = 'GO',
+): SpecRecord =>
+  record({
+    id,
+    validationExists: true,
+    validationUpdatedAtMs: validationAt,
+    updatedAtMs: contentAt,
+    artifactUpdatedAtMs: {
+      requirements: contentAt,
+      design: contentAt,
+      tasks: contentAt,
+    },
+    spec: implemented({ feature_name: id }).spec,
+  });
+
+const validation = (decision: 'GO' | 'NO-GO' | 'MANUAL_VERIFY_REQUIRED') => ({
+  content: ['## Validation Report', `- DECISION: ${decision}`, ''].join('\n'),
+});
+
+const run = (overrides: Partial<RunState>): RunState => ({
+  id: 'run-1',
+  skill: 'kiro-impl',
+  feature: 'demo',
+  prompt: '/kiro-impl demo',
+  permissionMode: 'acceptEdits',
+  status: 'running',
+  segments: [],
+  startedAt: NOW - 60_000,
+  ...overrides,
+});
+
+const roadmap: RoadmapInfo = {
+  path: '/tmp/steering/roadmap.md',
+  order: ['auth', 'notifications', 'history'],
+  deps: {
+    auth: [],
+    notifications: ['auth'],
+    history: ['auth'],
+  },
+};
 
 describe('buildOverview', () => {
-  it('maps run states to board columns', () => {
-    const model = buildOverview({
-      specs: [],
-      sessions: [],
-      now: NOW,
-      runs: [
-        run({ id: 'r-attention', pending: { id: 'p1', kind: 'permission', toolName: 'Bash' } }),
-        run({ id: 'r-running' }),
-        run({ id: 'r-done', status: 'done', endedAt: NOW - 1000 }),
-        run({ id: 'r-error', status: 'error', endedAt: NOW - 1000 }),
-        run({ id: 'r-cancelled', status: 'cancelled', endedAt: NOW - 1000 }),
-        run({ id: 'r-preview', status: 'preview' }),
-      ],
-    });
-
-    expect(model.columns.attention.map((card) => card.runId)).toEqual(['r-attention']);
-    expect(model.columns.running.map((card) => card.runId)).toEqual(['r-running']);
-    expect(model.columns.done.map((card) => card.runId)).toEqual(['r-done']);
-    expect(model.columns.failed.map((card) => card.runId)).toEqual(['r-error', 'r-cancelled']);
-    expect(model.columns.attention[0].label).toBe('Permission needed');
-    expect(model.columns.failed.find((card) => card.runId === 'r-cancelled')?.tone).toBe(
-      'cancelled',
-    );
-    expect(model.kpi.needsYou).toBe(1);
-    expect(model.kpi.running).toBe(1);
-    expect(model.kpi.failed).toBe(1);
-  });
-
-  it('surfaces sessions active elsewhere and de-duplicates live sessions', () => {
-    const model = buildOverview({
-      specs: [],
-      now: NOW,
-      runs: [run({ id: 'r-live', sessionId: 'session-live' })],
-      sessions: [
-        session({ id: 'session-live', updatedAt: NOW - 1000 }),
-        session({ id: 'session-other', feature: 'other', skill: 'kiro-impl' }),
-        session({
-          id: 'session-stale',
-          feature: 'stale',
-          skill: 'kiro-impl',
-          updatedAt: NOW - ACTIVE_SESSION_MS - 1,
-        }),
-      ],
-    });
-
-    const running = model.columns.running.map((card) => card.id);
-    expect(running).toContain('run:r-live');
-    expect(running).toContain('session:session-other');
-    expect(running).not.toContain('session:session-live');
-    expect(running).not.toContain('session:session-stale');
-    expect(model.columns.running.find((card) => card.id === 'session:session-other')?.label).toBe(
-      'Active elsewhere',
-    );
-  });
-
-  it('does not treat a finished transcript as a running worker', () => {
-    const model = buildOverview({
-      specs: [],
-      now: NOW,
+  it('keeps the implementation stage separate from the run state', () => {
+    const demo = implemented();
+    const base = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: demo, tasks: tasks(4, 8) }],
       runs: [],
-      sessions: [
-        session({ id: 'session-done', activity: { state: 'stopped' } }),
-        session({
-          id: 'session-waiting',
-          feature: 'waiting',
-          activity: { state: 'waiting', pending: 'question' },
-          lastMessage: 'Which environment should I use?',
-        }),
-        session({ id: 'session-running', feature: 'running', activity: { state: 'running' } }),
-      ],
+      now: NOW,
     });
 
-    const running = model.columns.running.map((card) => card.id);
-    const attention = model.columns.attention.map((card) => card.id);
-    expect(running).toContain('session:session-running');
-    expect(running).not.toContain('session:session-done');
-    expect(attention).toContain('session:session-waiting');
-    expect(
-      model.columns.attention.find((card) => card.id === 'session:session-waiting')?.label,
-    ).toBe('Question elsewhere');
-    expect(model.kpi.needsYou).toBe(1);
-  });
+    expect(base.specs[0].stage).toBe('implementation');
+    expect(base.specs[0].runState).toBe('none');
+    expect(base.specs[0].status).toBe('No run record');
+    expect(base.specs[0].blockedReason).toBeUndefined();
 
-  it('derives spec approvals, review phases, and task progress', () => {
-    const model = buildOverview({
-      runs: [],
-      sessions: [],
+    const running = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: demo, tasks: tasks(4, 8) }],
+      runs: [run({ feature: 'demo' })],
       now: NOW,
-      specs: [{ record: record(), tasks: TASKS }],
     });
+    expect(running.specs[0].stage).toBe('implementation');
+    expect(running.specs[0].runState).toBe('running');
+    expect(running.specs[0].status).toBe('Running');
 
-    const spec = model.specs[0];
-    expect(spec.label).toBe('Demo feature');
-    expect(spec.approvedCount).toBe(1);
-    expect(spec.reviewPhases).toEqual(['design']);
-    expect(spec.approvals.requirements).toBe('approved');
-    expect(spec.approvals.design).toBe('generated');
-    expect(spec.approvals.tasks).toBe('draft');
-    expect(spec.tasksDone).toBe(1);
-    expect(spec.tasksTotal).toBe(3);
-    expect(spec.nextKind).toBe('review');
-    expect(spec.nextLabel).toBe('Review Design');
-    expect(spec.createdAt).toBe(Date.parse('2026-05-01T00:00:00Z'));
-    expect(spec.updatedAt).toBe(Date.parse('2026-05-02T00:00:00Z'));
-    expect(model.kpi.reviews).toBe(1);
-    expect(model.kpi.needsYou).toBe(1);
-    expect(model.kpi.tasksDone).toBe(1);
-    expect(model.kpi.tasksTotal).toBe(3);
-    expect(model.columns.attention).toHaveLength(1);
-    expect(model.columns.attention[0].source).toBe('review');
-    expect(model.columns.attention[0].label).toBe('Review Design');
-    expect(model.columns.attention[0].specId).toBe('demo');
-  });
-
-  it('counts live workers per spec and sorts newest specs first', () => {
-    const model = buildOverview({
-      now: NOW,
-      sessions: [session({ id: 's-other', feature: 'other', skill: 'kiro-impl' })],
+    const waiting = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: demo, tasks: tasks(4, 8) }],
       runs: [
-        run({ id: 'r-demo', feature: 'demo', sessionId: 's-demo' }),
         run({
-          id: 'r-wait',
           feature: 'demo',
           pending: { id: 'p1', kind: 'question', questions: [] },
         }),
       ],
-      specs: [
-        {
-          record: record({
-            id: 'draft',
-            spec: {
-              ...record().spec!,
-              feature_name: 'Draft',
-              created_at: '2026-05-03T00:00:00Z',
-            },
-          }),
-          tasks: '',
-        },
-        { record: record(), tasks: TASKS },
-      ],
+      now: NOW,
     });
+    expect(waiting.specs[0].runState).toBe('input');
+    expect(waiting.specs[0].status).toBe('Input waiting');
+    expect(waiting.specs[0].pendingCount).toBe(1);
 
-    const demo = model.specs.find((spec) => spec.id === 'demo');
-    const draft = model.specs.find((spec) => spec.id === 'draft');
-    expect(demo?.active).toBe(1);
-    expect(demo?.attention).toBe(1);
-    expect(model.specs[0].id).toBe('draft');
-    expect(draft).toBeDefined();
-    expect(model.kpi.activeSpecs).toBe(1);
+    const multiple = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: demo, tasks: tasks(4, 8) }],
+      runs: [
+        run({ id: 'r1', feature: 'demo' }),
+        run({ id: 'r2', feature: 'demo', startedAt: NOW - 30_000 }),
+      ],
+      now: NOW,
+    });
+    expect(multiple.specs[0].runningCount).toBe(2);
+    expect(multiple.specs[0].status).toBe('2 running');
   });
 
-  it('matches the Specs tree next state, including completion', () => {
-    const approvals = {
-      requirements: { generated: true, approved: true },
-      design: { generated: true, approved: true },
-      tasks: { generated: true, approved: true },
-    };
-    const base = record();
+  it('treats approval waiting as state, not an inbox item', () => {
     const model = buildOverview({
-      now: NOW,
+      projectName: 'demo',
+      specs: [{ record: record(), tasks: tasks(0, 3) }],
       runs: [],
-      sessions: [],
-      specs: [
-        {
-          record: record({
-            id: 'complete',
-            spec: {
-              ...base.spec!,
-              approvals,
-              ready_for_implementation: true,
-            },
-          }),
-          tasks: ['- [x] 1. Done', '- [x] 2. Done'].join('\n'),
-        },
-        {
-          record: record({
-            id: 'missing-tasks',
-            spec: {
-              ...base.spec!,
-              approvals,
-              ready_for_implementation: true,
-            },
-          }),
-          tasks: '',
-        },
-      ],
+      now: NOW,
     });
+    const spec = model.specs[0];
 
-    const complete = model.specs.find((spec) => spec.id === 'complete');
-    expect(complete?.nextKind).toBe('done');
-    expect(complete?.nextLabel).toBeUndefined();
-
-    const missing = model.specs.find((spec) => spec.id === 'missing-tasks');
-    expect(missing?.nextKind).toBe('generate');
-    expect(missing?.nextLabel).toBe('Generate tasks');
+    expect(spec.reviewPhases).toEqual(['design']);
+    expect(spec.status).toBe('Review pending: Design');
+    expect(model.kpi.reviewPending).toBe(1);
+    expect(model.kpi.reviews).toBe(1);
   });
 
-  it('uses the newest spec or artifact timestamp as last updated', () => {
+  it('shows explicit blocks but does not treat old updates as blocked', () => {
+    const blocked = specWith({
+      blocked_reason: 'Waiting for the shared API contract',
+    });
+    const old = record({
+      id: 'old',
+      updatedAtMs: Date.parse('2020-01-01T00:00:00Z'),
+      spec: { ...record().spec!, updated_at: '2020-01-01T00:00:00Z' },
+    });
+
     const model = buildOverview({
-      now: NOW,
+      projectName: 'demo',
+      specs: [
+        { record: blocked, tasks: tasks(1, 3) },
+        { record: old, tasks: tasks(1, 3) },
+      ],
       runs: [],
-      sessions: [],
-      specs: [
-        {
-          record: record({
-            artifactUpdatedAtMs: {
-              requirements: Date.parse('2026-05-03T00:00:00Z'),
-              design: Date.parse('2026-05-03T12:00:00Z'),
-              tasks: Date.parse('2026-05-04T00:00:00Z'),
-            },
-          }),
-          tasks: TASKS,
-        },
-      ],
+      now: NOW,
     });
 
-    expect(model.specs[0].updatedAt).toBe(Date.parse('2026-05-04T00:00:00Z'));
+    const blockedSpec = model.specs.find((spec) => spec.id === 'demo');
+    expect(blockedSpec?.blockedReason).toBe('Waiting for the shared API contract');
+    expect(blockedSpec?.blockedKind).toBe('explicit');
+    expect(blockedSpec?.status).toContain('Blocked:');
+
+    const oldSpec = model.specs.find((spec) => spec.id === 'old');
+    expect(oldSpec?.blockedReason).toBeUndefined();
+    expect(oldSpec?.status).not.toContain('Blocked');
+
+    expect(model.kpi.blocked).toBe(1);
+    expect(model.kpi.blockedExplicit).toBe(1);
+    expect(model.kpi.blockedDependency).toBe(0);
   });
 
-  it('sums today spend without double counting live sessions', () => {
+  it('derives dependency waiting and downstream impact from roadmap.md', () => {
+    const auth = implemented({ feature_name: 'Auth' }, { id: 'auth' });
+    const notifications = specWith(
+      {
+        feature_name: 'Notifications',
+        approvals: {
+          requirements: { generated: false, approved: false },
+          design: { generated: false, approved: false },
+          tasks: { generated: false, approved: false },
+        },
+        ready_for_implementation: false,
+      },
+      { id: 'notifications' },
+    );
+    const history = specWith(
+      {
+        feature_name: 'History',
+        approvals: {
+          requirements: { generated: false, approved: false },
+          design: { generated: false, approved: false },
+          tasks: { generated: false, approved: false },
+        },
+        ready_for_implementation: false,
+      },
+      { id: 'history' },
+    );
+
     const model = buildOverview({
-      specs: [],
+      projectName: 'demo',
+      specs: [
+        { record: auth, tasks: tasks(1, 2) },
+        { record: notifications, tasks: '' },
+        { record: history, tasks: '' },
+      ],
+      runs: [],
+      roadmap,
       now: NOW,
+    });
+
+    const notes = model.specs.find((spec) => spec.id === 'notifications');
+    expect(notes?.waitingOn).toEqual(['auth']);
+    expect(notes?.blockedKind).toBe('dependency');
+    expect(notes?.status).toBe('Waiting on Auth');
+
+    const authSpec = model.specs.find((spec) => spec.id === 'auth');
+    expect(authSpec?.downstream).toEqual(['notifications', 'history']);
+
+    expect(model.dependencyInfo).toBe('available');
+    expect(model.dependencies.some((note) => note.kind === 'waiting')).toBe(true);
+    expect(model.dependencies.some((note) => note.kind === 'downstream')).toBe(true);
+  });
+
+  it('does not claim readiness without dependency information', () => {
+    const notifications = specWith(
+      {
+        approvals: {
+          requirements: { generated: false, approved: false },
+          design: { generated: false, approved: false },
+          tasks: { generated: false, approved: false },
+        },
+        ready_for_implementation: false,
+      },
+      { id: 'notifications' },
+    );
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: notifications, tasks: '' }],
+      runs: [],
+      now: NOW,
+    });
+
+    expect(model.dependencyInfo).toBe('none');
+    expect(model.dependencies).toEqual([]);
+    expect(model.specs[0].hasDependencyInfo).toBe(false);
+    expect(model.specs[0].status).not.toContain('ready');
+  });
+
+  it('shows unknown dependencies without calling the spec blocked', () => {
+    const notifications = specWith(
+      {
+        feature_name: 'Notifications',
+        approvals: {
+          requirements: { generated: false, approved: false },
+          design: { generated: false, approved: false },
+          tasks: { generated: false, approved: false },
+        },
+        ready_for_implementation: false,
+      },
+      { id: 'notifications' },
+    );
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: notifications, tasks: '' }],
+      runs: [],
+      roadmap: {
+        path: '/tmp/roadmap.md',
+        order: ['notifications'],
+        deps: { notifications: ['missing-spec'] },
+      },
+      now: NOW,
+    });
+
+    expect(model.specs[0].dependencyUnknown).toEqual(['missing-spec']);
+    expect(model.specs[0].blockedReason).toBeUndefined();
+    expect(model.specs[0].status).toBe('Dependency status unknown: missing-spec');
+    expect(model.kpi.blocked).toBe(0);
+    expect(model.dependencies[0]?.text).toBe('Dependency status unknown: missing-spec');
+  });
+
+  it('separates implementation completion from verification state', () => {
+    const contentAt = NOW - 10_000;
+    const complete = completedRecord('complete', contentAt + 1000, contentAt, 'GO');
+    const stale = completedRecord('stale', contentAt - 1000, contentAt, 'GO');
+    const failed = completedRecord('failed', contentAt + 1000, contentAt, 'NO-GO');
+    const manual = completedRecord('manual', contentAt + 1000, contentAt, 'MANUAL_VERIFY_REQUIRED');
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [
+        { record: complete, tasks: tasks(2, 2), validation: validation('GO') },
+        { record: stale, tasks: tasks(2, 2), validation: validation('GO') },
+        { record: failed, tasks: tasks(2, 2), validation: validation('NO-GO') },
+        { record: manual, tasks: tasks(2, 2), validation: validation('MANUAL_VERIFY_REQUIRED') },
+      ],
+      runs: [],
+      now: NOW,
+    });
+
+    const completeSpec = model.specs.find((spec) => spec.verification.status === 'verified');
+    expect(completeSpec?.completed).toBe(true);
+    expect(completeSpec?.stage).toBe('done');
+    expect(completeSpec?.status).toBe('Verified');
+
+    const staleSpec = model.specs.find((spec) => spec.verification.status === 'stale');
+    expect(staleSpec?.completed).toBe(false);
+    expect(staleSpec?.stage).toBe('verification');
+    expect(staleSpec?.status).toBe('Verification result is stale');
+
+    const failedSpec = model.specs.find((spec) => spec.verification.status === 'failed');
+    expect(failedSpec?.completed).toBe(false);
+    expect(failedSpec?.status).toBe('Verification failed');
+
+    const manualSpec = model.specs.find((spec) => spec.verification.status === 'manual');
+    expect(manualSpec?.completed).toBe(false);
+    expect(manualSpec?.status).toBe('Manual verification required');
+
+    expect(model.kpi.done).toBe(1);
+    expect(model.kpi.verificationPending).toBe(3);
+    expect(model.kpi.verificationFailed).toBe(1);
+  });
+
+  it('shows verification pending when tasks are complete without a result', () => {
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: implemented({}, { id: 'pending' }), tasks: tasks(2, 2) }],
+      runs: [],
+      now: NOW,
+    });
+
+    expect(model.specs[0].implementationComplete).toBe(true);
+    expect(model.specs[0].completed).toBe(false);
+    expect(model.specs[0].stage).toBe('verification');
+    expect(model.specs[0].status).toBe('Verification pending');
+    expect(model.specs[0].verification.status).toBe('none');
+    expect(model.kpi.done).toBe(0);
+  });
+
+  it('distinguishes missing verification from fetch failure and invalid metadata', () => {
+    const unreadable = record({
+      id: 'unreadable',
+      validationExists: true,
+      validationUpdatedAtMs: NOW,
+    });
+    const broken = record({ id: 'broken', spec: null, specError: 'Invalid JSON' });
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [
+        { record: implemented({}, { id: 'none' }), tasks: tasks(1, 1) },
+        { record: unreadable, tasks: tasks(1, 1), validation: { error: 'EACCES' } },
+        { record: broken, tasks: '' },
+      ],
+      runs: [],
+      now: NOW,
+    });
+
+    const none = model.specs.find((spec) => spec.id === 'none');
+    expect(none?.verification.status).toBe('none');
+    expect(none?.status).toBe('Verification pending');
+
+    const error = model.specs.find((spec) => spec.id === 'unreadable');
+    expect(error?.verification.status).toBe('error');
+    expect(error?.status).toBe('Verification info unavailable');
+
+    const invalid = model.specs.find((spec) => spec.id === 'broken');
+    expect(invalid?.stage).toBe('unknown');
+    expect(invalid?.status).toBe('spec.json invalid');
+  });
+
+  it('does not keep a spec failed after a newer successful run', () => {
+    const demo = implemented();
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: demo, tasks: tasks(1, 4) }],
       runs: [
         run({
-          id: 'r-cost',
-          sessionId: 's-live',
+          id: 'old-fail',
+          feature: 'demo',
+          status: 'error',
+          startedAt: NOW - 120_000,
+          endedAt: NOW - 100_000,
+        }),
+        run({
+          id: 'new-done',
+          feature: 'demo',
           status: 'done',
-          endedAt: NOW - 1000,
-          usageCostUsd: 0.5,
+          startedAt: NOW - 50_000,
+          endedAt: NOW - 40_000,
         }),
       ],
-      sessions: [
-        session({ id: 's-live', costUsd: 0.4, updatedAt: NOW - 1000 }),
-        session({
-          id: 's-other',
-          feature: 'other',
-          skill: 'kiro-impl',
-          costUsd: 0.2,
-          updatedAt: NOW - 1000,
-        }),
-        session({
-          id: 's-old',
-          feature: 'old',
-          skill: 'kiro-impl',
-          costUsd: 10,
-          updatedAt: NOW - 3 * 24 * 60 * 60 * 1000,
-        }),
-      ],
+      now: NOW,
     });
 
-    expect(model.kpi.spendTodayUsd).toBeCloseTo(0.7);
-    expect(model.kpi.sessionsToday).toBe(2);
+    expect(model.specs[0].runState).toBe('idle');
+    expect(model.specs[0].status).toBe('No active run');
+    expect(model.specs[0].status).not.toContain('failed');
+  });
+
+  it('does not treat an unrecognized validation report as verified', () => {
+    const demo = record({
+      validationExists: true,
+      validationUpdatedAtMs: NOW,
+      updatedAtMs: NOW - 1000,
+      spec: implemented().spec,
+    });
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [
+        {
+          record: demo,
+          tasks: tasks(2, 2),
+          validation: { content: '## Validation Report\n\nNo decision line yet.\n' },
+        },
+      ],
+      runs: [],
+      now: NOW,
+    });
+
+    expect(model.specs[0].verification.status).toBe('unconfirmed');
+    expect(model.specs[0].completed).toBe(false);
+    expect(model.specs[0].status).toBe('Verification result unconfirmed');
+  });
+
+  it('sorts blocked, running, waiting, other, then completed specs', () => {
+    const contentAt = NOW - 10_000;
+    const blocked = specWith({ blocked_reason: 'Contract pending' }, { id: 'blocked' });
+    const running = implemented({}, { id: 'running' });
+    const review = specWith({}, { id: 'review' });
+    const other = implemented({}, { id: 'other' });
+    const done = completedRecord('done', contentAt + 1000, contentAt, 'GO');
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [
+        { record: done, tasks: tasks(2, 2), validation: validation('GO') },
+        { record: other, tasks: tasks(1, 5) },
+        { record: review, tasks: tasks(0, 3) },
+        { record: running, tasks: tasks(1, 5) },
+        { record: blocked, tasks: tasks(1, 5) },
+      ],
+      runs: [run({ id: 'run-running', feature: 'running' })],
+      now: NOW,
+    });
+
+    expect(model.specs.map((spec) => spec.id)).toEqual([
+      'blocked',
+      'running',
+      'review',
+      'other',
+      'done',
+    ]);
+    expect(model.specs[4].completed).toBe(true);
+    expect(model.kpi.inProgress).toBe(4);
+    expect(model.kpi.done).toBe(1);
+  });
+
+  it('builds recent events from recorded updates, runs, and validation', () => {
+    const contentAt = NOW - 10_000;
+    const done = completedRecord('demo', contentAt + 1000, contentAt, 'GO');
+    const failedRun = run({
+      id: 'run-failed',
+      feature: 'demo',
+      status: 'error',
+      endedAt: NOW - 1000,
+    });
+
+    const model = buildOverview({
+      projectName: 'demo',
+      specs: [{ record: done, tasks: tasks(2, 2), validation: validation('GO') }],
+      runs: [failedRun],
+      now: NOW,
+    });
+
+    expect(model.events.some((event) => event.text === 'Spec updated')).toBe(true);
+    expect(model.events.some((event) => event.text === 'Run started: /kiro-impl')).toBe(true);
+    expect(model.events.some((event) => event.text === 'Run failed')).toBe(true);
+    expect(model.events.some((event) => event.text === 'Validation recorded: GO')).toBe(true);
+    expect(model.events.find((event) => event.text === 'Run failed')?.scope).toBe('local');
+    expect(model.events.find((event) => event.text === 'Validation recorded: GO')?.scope).toBe(
+      'repo',
+    );
   });
 });

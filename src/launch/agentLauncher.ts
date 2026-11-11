@@ -14,6 +14,8 @@ export interface ConsoleLaunchMeta {
 export interface RunSkillOptions {
   // Present only when the host wires the Runs console; agent 'claude-console' requires it.
   consoleLauncher?: (prompt: string, meta: ConsoleLaunchMeta) => Promise<void>;
+  /** Extra arguments appended after the feature (for example task IDs). */
+  args?: string;
 }
 
 const openCopilotChat = async (prompt: string): Promise<void> => {
@@ -70,7 +72,7 @@ export const runSkill = async (
   skill: string,
   options: RunSkillOptions = {},
 ): Promise<void> => {
-  const invocation = buildInvocation(config, skill, feature);
+  const invocation = buildInvocation(config, skill, feature, options.args);
 
   if (config.agent === 'copilot') {
     await openCopilotChat(invocation.prompt);

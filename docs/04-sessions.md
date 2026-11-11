@@ -43,35 +43,57 @@ Claude Code はプロジェクトごとにセッションを保存します。
 
 ## セッションの活動状態(`activity`)
 
-Sessions ビューは履歴一覧なので状態を持ちませんが、Overview は「別ウィンドウでまだ動いているか」を知る必要があります。そこで `readSessionTailInfo()` が JSONL の末尾を逆順に走査し、`SessionRecord.activity` を返します。
+Sessions ビューは選択中 Spec（または全 Spec）のセッションを表示しつつ、`readSessionTailInfo()` が JSONL の末尾を逆順に走査して返す `SessionRecord.activity` を状態アイコン / ラベルに使います。
 
-| 末尾の内容 | `activity.state` | Overview での扱い |
+| 末尾の内容 | `activity.state` | Sessions ビューでの表示 |
 | --- | --- | --- |
-| assistant の `tool_use`(未完了) | `running` | `Running` / **Active elsewhere** |
-| 未回答の `AskUserQuestion` | `waiting` (`pending: 'question'`) | `Needs you` / **Question elsewhere** |
+| assistant の `tool_use`(未完了) | `running` | `Running` / **Active** |
+| 未回答の `AskUserQuestion` | `waiting` (`pending: 'question'`) | `Waiting for input` / **Question** |
 | user の `tool_result` | `running` | `Running` |
-| assistant のテキスト + `system stop_hook_summary` / `turn_duration` | `stopped` | ボードに出さない |
-| `result` エントリ | `stopped` | ボードに出さない |
+| assistant のテキスト + `system stop_hook_summary` / `turn_duration` | `stopped` | 停止アイコン |
+| `result` エントリ | `stopped` | 停止アイコン |
 | assistant のテキストのみ(停止マーカーなし) | 更新から 60 秒以内なら `running`、それ以降は `stopped` | 同上 |
-| 判定できる内容がない | `unknown` | ボードに出さない |
+| 判定できる内容がない | `unknown` | 不明アイコン |
 
 補足:
 
 - **mtime だけでは判定しない**。完了後も `last-prompt` / `cost-state` などのメタ行が追記され、mtime は新しくなる
 - `stop_hook_summary` / `turn_duration` / `stop` を停止マーカーとして扱う
 - 停止マーカーが無い古い CLI 形式のためのフォールバックが 60 秒の猶予
-- Sessions ツリーは従来どおり全セッションを表示する。Overview だけが `activity` で絞り込む
+- Sessions ツリーは選択中 Spec（または全 Spec）のセッションを表示し、`activity` は状態表示に使う
+- 15分以上更新がなく、対応する実行中 Run もない `running` / `waiting` セッションは、停止と断定せず `unverified` として Past sessions に表示する
 
 ## Sessions ビュー(`ui/sessionsTree.ts`)
 
-| 操作 | 動作 |
-| --- | --- |
-| ホバー | ツールチップに **最後のアシスタント発話** + id / updated / cwd / file |
-| クリック | `ccSdd.previewSession` → **読み取り専用プレビュー**を Runs コンソールに開く |
-| インライン(右) | `ccSdd.resumeSession` → アクションメニュー |
-| ビュータイトルの更新 | `ccSdd.refreshSessions` |
+選択中 Spec の作業状況を確認するビューです。初期表示は選択中 Spec に絞り、
+ビュー上部の **Showing: ...** ノード（またはタイトルの scope ボタン）で全 Spec に切り替えられます。
 
-アクションメニューの内容: Preview transcript / Resume in Runs console / Resume in terminal / Open raw transcript / Copy session id。
+| 要素 | 内容 |
+| --- | --- |
+| Scope | `Showing: <spec>` / `Showing all specs`。クリックで切り替え |
+| Active & waiting | `activity.state` が `running` / `waiting` で、15分以内の更新または対応する実行中 Run があるセッション |
+| Past sessions | `stopped` / `unknown`、または記録上 `running` / `waiting` でも更新が古く有効な Run がないセッション（`unverified`） |
+| Other specs | 選択中 Spec 以外に active / waiting がある場合の件数と全体表示への導線 |
+
+セッション項目:
+
+| 項目 | 内容 |
+| --- | --- |
+| ラベル | 最後の活動メッセージ（なければ工程名） |
+| description | Spec 名 · 工程 · 実行状態 · 最終活動時刻 |
+| 工程 | `kiro-impl` → Implementation、`kiro-validate-impl` → Verification など |
+| ツールチップ | 開始時刻・最終活動・最後のメッセージ・トークン（補助）・id / file |
+| クリック | `ccSdd.previewSession` で読み取り専用プレビュー |
+| インライン（active + run あり） | `ccSdd.openSessionRun` で関連 Run を開く |
+| インライン（history） | `ccSdd.resumeSession` で再開メニュー |
+
+状態の扱い:
+
+- `activity` はトランスクリプト末尾から記録された値を使い、**更新がない時間だけでは停止と推測しない**
+- セッションの終了や最終メッセージだけで Spec の完了・検証成功を確定しない
+- 関連 Run は `sessionId` が一致する場合だけ紐付ける（名前や時刻では紐付けない）
+- 同じ Spec の複数セッションを1件にまとめない
+- 実行中セッションには resume を出さず、履歴セッションだけ再開導線を出す
 
 `~/.claude/projects/<project>/*.jsonl` を `FileSystemWatcher` で監視し、変更があれば自動更新します(他プロジェクトのセッションは表示しません)。
 
@@ -131,7 +153,7 @@ claude --resume <session-id>
 ## 設計上の注意
 
 - **読み取り専用のプレビューは課金ゼロ**: SDK を起動しないためトークンを消費しません
-- **完了済みセッションは Overview に出ない**: Sessions には残るが、`activity` が `stopped` のためボード対象外
+- **完了済みセッションは停止状態で表示される**: Sessions には残り、`activity` が `stopped` として扱われる
 - **再開は履歴を送る**ため、巨大セッションの resume はトークン消費が大きくなります(必要ならプレビューで内容を確認してから)
 - セッションの読み取りはローカルファイルのみ。ネットワーク送信はしません
 - マルチルートは他機能と同じく**先頭フォルダ**基準です

@@ -1,132 +1,170 @@
-# Overview ボード（リーダー / PM 向け）
+# Overview ポートフォリオ（チーム / Spec 進捗）
 
-複数のワーカー（人 / エージェント）が並行して動いているとき、リーダーや PM が
-「いま何が動いていて、誰が止まっていて、どこまで進んだか」を 1 画面で見るためのボードです。
+複数の担当者がそれぞれの Spec を進めているとき、チームリーダーが
+「どの Spec がどこまで進み、何が止まり、次に何ができるか」を俯瞰するための画面です。
 
-`cc-sdd: Open Overview`（Specs / Tasks / Sessions のタイトルバーのダッシュボードアイコン、Runs コンソールの **Overview** ボタン）で開きます。
+`cc-sdd: Open Overview`（Specs / Tasks / Sessions のタイトルバーのダッシュボードアイコン）で開きます。
+設計の背景と受け入れ条件は [overview-improvement-design.md](./overview-improvement-design.md) を参照してください。
+サイドバー側の作業フローは [worker-sidebar-redesign.md](./worker-sidebar-redesign.md) と共通の完了判定を使います。
 
-## 何を集約しているか
+## 集計範囲
 
-Overview は新しい状態ファイルを持たず、既存の 3 つの情報源を突き合わせます。
+Overview は **このワークスペースのリポジトリ状態** と、
+**この VS Code ウィンドウで取得できた run 記録** を表示します。
 
-| 情報源 | 使うもの | 強み / 制約 |
-| --- | --- | --- |
-| Runs コンソール(`ui/runsConsole.ts`) | このウィンドウの `RunState[]` | 正確な pending / 権限 / エラー / コスト。再起動で消える |
-| Sessions(`core/sessions.ts`) | `~/.claude/projects/<encoded-cwd>/*.jsonl` の末尾 | 別ウィンドウ / ターミナルの作業も見える。状態はトランスクリプト末尾から推定 |
-| Specs / Tasks(`core/repository.ts` / `core/tasks.ts`) | `spec.json` の承認、`tasks.md` のチェックボックス | 承認ゲートと実装進捗。エージェントの実行状態は持たない |
+- Spec / 承認 / タスク / 検証結果: このワークスペース
+- 実行状態: この VS Code ウィンドウの Runs コンソールが持つ記録
 
-### 相関ルール
-
-- 同じ `sessionId` を持つ run とセッションは **run を優先**（二重表示しない）
-- run にまだ `sessionId` が無い場合は `feature + skill` が一致するセッションを除外
-- セッションは `updatedAt` が **3 分以内**で、かつ `activity` が「作業中」のときだけボードに出す
-  - 末尾が assistant の `tool_use`（未完了）→ `Running` / `Active elsewhere`
-  - 未回答の `AskUserQuestion` → `Needs you` / `Question elsewhere`
-  - `system stop_hook_summary` / `turn_duration` / `result` などの停止マーカーがある → **出さない**（完了 / 待機中）
-  - 停止マーカーが無い古い形式は、assistant テキストの最終更新から 60 秒で停止扱い
-- それより古いセッションはボードに出さない（履歴は Sessions ビュー / Runs コンソールの役割）
+ローカルの run をチーム全体の稼働状況としては表示しません。ヘッダーにもこの範囲を明記します。
+ローカル実行の監視は **Runs コンソール**、会話履歴は **Sessions ビュー** が担当します。
 
 ## 画面構成
 
-### KPI ストリップ
+上から次の順に並びます。
+
+1. ヘッダー（プロジェクト名・最終取得時刻・更新・集計範囲）
+2. プロジェクト概況（KPI）
+3. 進行中の Spec
+4. 依存関係・着手候補
+5. 最近の更新
+6. 完了済み Spec（初期状態は折りたたみ）
+
+### プロジェクト概況
 
 | KPI | 意味 |
 | --- | --- |
-| Needs you | pending（権限 / 質問）の run + 承認待ちフェーズ + 質問待ちセッション |
-| Running | このウィンドウの実行中 run + トランスクリプト末尾が作業中のセッション |
-| Failed today | 当日に error で終わった run |
-| Tasks done | 全 spec の `tasks.md` の完了 / 総数 |
-| Spend today | 当日のセッションコスト（run の値が先行していれば大きい方） |
+| In progress | 完了扱いになっていない Spec。Blocked / Verification pending を含む |
+| Blocked | 明示的な停止理由、または未完了の依存を持つ Spec |
+| Review pending | 承認待ちフェーズを持つ Spec |
+| Verification pending | 実装タスクは完了したが、現在の成果物に対する検証完了を確認できていない Spec |
+| Done | 実装完了かつ、現在の成果物に対する検証が GO の Spec |
 
-KPI をクリックすると、その列にフォーカスします（もう一度クリックで解除）。`Needs you` は
-**承認待ちカードも含む**ため、KPI の件数と `Needs you` 列の件数が一致します。
+KPI をクリックすると一覧を絞り込みます。件数は相互排他的ではないため、
+サブテキストで内訳（explicit / dependency、failed など）を表示します。
+全タスクの合計進捗は参考値として表示し、プロジェクト全体の完成率には換算しません。
 
-### Kanban
+### 進行中の Spec
+
+Spec を横断して比較できる表です。
 
 | 列 | 内容 |
 | --- | --- |
-| Needs you | `pending` がある run、質問待ちセッション、承認待ちのフェーズ |
-| Running | 実行中の run、トランスクリプト末尾が作業中のセッション |
-| Done | 正常終了した run |
-| Failed | error / cancelled の run |
+| Spec | 表示名と識別子 |
+| Stage | Requirements / Design / Tasks / Implementation / Verification |
+| Tasks | 完了数 / 総数（参考の進捗バー付き） |
+| Current status | 実行中、入力待ち、承認待ち、検証待ち、停止理由など |
+| Updated | Spec の最終更新時刻（ホバーで絶対時刻） |
+| Action | 関連する Run を開く |
 
-カードは 1 ワーカー（run / セッション）または 1 承認。feature、skill、経過時間、
-直近のツール / 発話、トークン、コストを表示します。クリックで run タブ、
-セッションプレビュー、または成果物を開きます。
+工程と実行状態は分離しています。実装工程でも、実行記録がなければ `No run record` と表示し、
+`Running` とは表示しません。
 
-### ステータスバー
+並び順:
 
-run が動いている間は `$(dashboard) N waiting · M running` を表示します。クリックで Overview を開きます。
-待ち件数は `RunsConsole.onDidChange` のたびに `getRuns()` から数え直すため、Overview を閉じていても最新です。
+1. 明示的なブロック、または直近の Run 失敗
+2. 実行中
+3. 入力待ち・承認待ち
+4. その他の未完了
 
-### Spec ポートフォリオ
+同じ区分内は、Spec の更新または run の開始 / 終了が新しい順です。自動更新時はスクロール位置とフィルター、
+折りたたみ状態を維持します。狭い画面では表を縦型の行に切り替えます。
 
-全 spec を新しい順（`spec.json` の `created_at`、なければ `updated_at` / ファイル時刻）で並べます。
-Specs ツリーと同じ next step 判定を使い、実装完了後は `Next` を表示しません。
-フェーズ、承認 3 段階、`tasks.md` の進捗バー、当日コスト、最終更新時刻を表示し、
-クリックで `tasks.md` を開きます。最終更新は `spec.json`・成果物・run・session のうち最新の時刻で、
-相対表示（ホバーで絶対時刻）になります。
+### 依存関係・着手候補
 
-## 実装
+`roadmap.md` の `## Specs (dependency order)` に記録された依存だけを使います。
+
+- 他の Spec の完了待ち
+- 後続 Spec が待っている未完了の依存
+- 依存条件を満たし、まだ着手していない Spec
+- 検証結果が現在の成果物より古い Spec（再検証の候補）
+
+`roadmap.md` がない場合は「依存情報なし」と表示します。「依存なし」「着手可能」とは判定しません。
+依存先の Spec が一覧にない場合は `Dependency status unknown` と表示し、明示的な Blocked とは区別します。
+
+### 最近の更新
+
+記録から確認できるイベントを新しい順に表示します。
+
+- Spec の追加・更新（`spec.json` / 成果物の最終更新）
+- Run の開始・完了・失敗・キャンセル（ローカル記録）
+- 検証レポートの記録
+
+初期表示は 10 件で、必要に応じて全件表示できます。
+タスク完了や工程変更の履歴基盤はまだないため、更新時刻だけから変更内容を捏造しません。
+その場合は中立的な `Spec updated` として表示します。
+
+### 完了済み Spec
+
+初期状態では折りたたみ、見出しに件数を表示します。展開すると次を表示します。
+
+- Spec 名
+- 検証結果（GO / NO-GO / MANUAL / stale / なし）
+- 完了または最終更新時刻
+- Spec 詳細へのリンク
+
+## 状態の扱い
+
+### 実装完了と検証完了
+
+| 状態 | 判定 |
+| --- | --- |
+| 実装中 | 未完了の実装タスクがある |
+| 実装完了 | すべての実装タスクが完了 |
+| 検証待ち | 実装完了だが、現在の成果物に対する検証完了を確認できない |
+| 検証失敗 | 現在の成果物に対応する検証結果が `NO-GO` |
+| 検証済み | 現在の成果物に対応する検証結果が `GO` |
+
+検証結果は Spec ディレクトリの `impl-validation.md` を読みます。
+`DECISION: GO | NO-GO | MANUAL_VERIFY_REQUIRED` 行を認識し、
+レポートの mtime が `spec.json` / requirements / design / tasks より古い場合は
+「検証結果あり・現在の成果物への適用は未確認」として `stale` 扱いにします。
+判定行がないレポートは `unconfirmed` とし、検証済みとは扱いません。
+
+### 承認待ち
+
+承認待ちは Spec の状態として表示します。チームリーダーを承認者として割り当てたり、
+Overview 全体を承認依頼の受信箱として扱ったりはしません。
+
+### 実行失敗とブロック
+
+- Run の失敗は実行状態であり、Spec 全体のブロックではありません。
+- 直近の Run が失敗した場合だけ `Last run failed` と表示します。
+  古い失敗の後に成功 Run があれば失敗状態にはしません。
+- Spec のブロックは `spec.json` の `blocked_reason` / `blockers`、
+  または未完了の依存として明示された場合だけ表示します。更新が古いだけでは判定しません。
+
+### 複数の実行
+
+同じ Spec に複数の有効な Run がある場合は `2 running` のように件数を表示し、
+Runs コンソールで一覧を確認できます。
+
+## データ取得と実装
 
 | ファイル | 役割 |
 | --- | --- |
-| `src/core/overview.ts` | 純粋な集約ロジック。`OverviewModel` / KPI / Kanban / ポートフォリオを生成（テスト対象） |
-| `src/core/sessions.ts` | `SessionRecord.activity` を生成（`readSessionTailInfo`） |
-| `src/ui/overviewPanel.ts` | Webview パネル。KPI / Kanban / ポートフォリオの描画 |
-| `src/ui/overviewStatusBar.ts` | `N waiting · M running` のステータスバー |
-| `src/extension.ts` | spec / tasks / sessions / runs を読み、`buildOverview` に渡す。コマンド登録 |
-| `src/ui/runsConsole.ts` | `getRuns()` / `onDidChange` / `openRun()` を公開。ヘッダーから Overview を開く |
-| `test/overview.test.ts` | 列分類・承認カード・重複排除・コスト集計のテスト |
-
-### データモデル
-
-```text
-OverviewInput
-  ├─ specs:   { record: SpecRecord, tasks?: string }[]
-  ├─ runs:    RunState[]        (このウィンドウ)
-  ├─ sessions: SessionRecord[]  (activity を含む)
-  └─ now:     number
-        ↓ buildOverview()
-OverviewModel
-  ├─ kpi:     OverviewKpi
-  ├─ columns: Record<'attention'|'running'|'done'|'failed', OverviewCard[]>
-  └─ specs:   OverviewSpec[]
-```
-
-- `OverviewCard.source`: `live` / `session` / `review`
-- `OverviewSpec.reviewPhases`: 承認待ちフェーズ。ここから `attention` カードを生成
-- `OverviewSpec.createdAt`: ポートフォリオの並び順に使う作成時刻
-- `OverviewSpec.nextKind` / `nextLabel`: Specs ツリーと共通の next step 判定。完了時は `nextLabel` なし
-- `OverviewSpec.updatedAt`: `spec.json` / 成果物 / run / session のうち最新の更新時刻
-- 各列は 20 件まで。`needsYou` は切り詰める前の件数
+| `src/core/overview.ts` | 純粋な集約ロジック（KPI / 表 / 依存 / イベント） |
+| `src/core/repository.ts` | `spec.json`・成果物・`impl-validation.md`・roadmap の読み取り |
+| `src/core/spec.ts` | Specs ツリーと共通の next step 判定 |
+| `src/ui/overviewPanel.ts` | Webview。表・依存・イベント・折りたたみ・フィルター |
+| `src/extension.ts` | specs / tasks / validation / roadmap / runs を集約 |
 
 ### 更新の流れ
 
 ```text
-run event → RunsConsole.updateAll (80ms 合流) → onDidChange
-          → OverviewStatusBar.update
-          → OverviewPanel.scheduleRefresh (350ms debounce)
-          → loadOverview (specs + tasks + sessions 5s cache + runs)
-          → buildOverview → webview へ state 送信
+.kiro/ のファイル変更 or Runs の更新
+  → OverviewPanel.scheduleRefresh (350ms debounce)
+  → loadOverview (specs + tasks + validation + roadmap + runs)
+  → buildOverview → webview へ state 送信
 ```
 
-ファイル監視（`.kiro/` と sessions）からの `refresh()` でも同じ経路で更新します。
-経過時間は webview 側の 1 秒タイマーで進め、ホストは再計算しません。
+Webview 側はフィルター、完了セクションの開閉、イベントの展開、
+スクロール位置を保持したまま再描画します。
 
-## 制約と次の一手
+## 制約
 
-- ライブ状態は**このウィンドウの Runs コンソール**が持つ。別ウィンドウの run は
-  トランスクリプト末尾からの推定で、完了直後はボードから消える（Sessions には残る）
-- 停止マーカーが書かれない古い CLI 形式では、assistant テキストが 60 秒更新されなければ
-  停止扱いにするフォールバックを使う
-- 別ウィンドウの権限待ちはトランスクリプトに専用の印が無いため、`Running` として見える
-  （`AskUserQuestion` は `waiting` として `Needs you` に出せる）
-- 各列は 20 件まで。KPI は切り詰める前の件数を表示する
-- 再起動すると run の履歴は失われる（Sessions には残る）
-- 次の一手は [plan.md](../plan.md) の **SF-1: 実行の永続化**。`run` の状態を
-  `.kiro/runs/` に書き出せば、Overview は複数ウィンドウ / 再起動後も正確な
-  ワーカー状態を表示できる
-- pending への回答や Cancel は現状 run タブで行う。Overview から直接操作する場合は
-  `runsConsole` のメッセージハンドラを共有する必要がある
-- Marketplace 用 README は画像なし。GitHub 用のスクリーンショットは VSIX に含めない
+- 表示できるのは **このワークスペースの checkout にある Spec** だけ。
+  他メンバーの未マージ作業は見えない。共有は git（branch / PR / merge）に依存する
+- 担当者（assignee）情報は持たない
+- Run 状態はこの VS Code ウィンドウの記録のみ。別ウィンドウの実行は Sessions ビューで確認する
+- タスク完了・工程変更の履歴はまだ保存していないため、最近の更新は
+  Spec 更新・Run イベント・検証レポートに限定される

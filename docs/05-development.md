@@ -50,7 +50,8 @@ esbuild src/extension.ts --bundle --platform=node --format=cjs \
 
 - `src/core/` は **vscode 非依存**の純粋ロジックなので、そのまま vitest でテスト
   - `spec` / `tasks` / `validation` / `repository`(一時ディレクトリで FS を実際に使う)/ `sessions` / `roadmap` / `overview`
-  - `overview` は run 状態の列分類、セッションの重複排除、承認カード、当日コストの集計を検証
+  - `overview` は工程/実行状態の分離、検証状態、ブロック、依存、イベント、並び順を検証
+  - `progress` は Specs / Tasks / Overview 共通の工程・検証・完了判定を検証
   - `sessions` はトランスクリプト末尾からの `activity` 判定(停止マーカー / `AskUserQuestion` / 60 秒フォールバック)も検証
 - `run/claudeRunner.ts` はイベント変換(`eventsFromClaudeLine`)・履歴変換・質問抽出・実行パス解決をテスト
 - Webview / Tree の見た目は自動テスト対象外。開発時は Webview の HTML を生成してヘッドレスブラウザで
@@ -96,8 +97,8 @@ git push origin v0.9.0   # これで Release まで自動
 | 権限 UI が出ない | `permissionMode: 'bypassPermissions'` では SDK が `canUseTool` を呼ばない(仕様) |
 | 実行ログが `session …` の連続になる | `system` イベントは `subtype === 'init'` 以外(hook 等)を無視する。init 判定を外すとノイズが溢れる |
 | 更新が重い | 履歴を `state` スナップショットに含めない。`history` は別メッセージで 1 回だけ送る。更新は 80ms で合流 |
-| Overview の Running が完了後も残る | セッションの mtime だけを見ると、`cost-state` 等のメタ行で更新されるため誤判定する。`readSessionTailInfo()` の `activity`(停止マーカー / `tool_use` / 60 秒フォールバック)を使う |
-| Overview が重い | セッション一覧は 5 秒キャッシュ。runs は `getRuns()` のスナップショット(`history` なし)。更新は 350ms デバウンス |
+| Sessions の Running が完了後も残る | セッションの mtime だけを見ると、`cost-state` 等のメタ行で更新されるため誤判定する。`readSessionTailInfo()` の `activity`(停止マーカー / `tool_use` / 60 秒フォールバック)を使う |
+| Sessions 一覧が重い | セッション一覧は 5 秒キャッシュ。Overview は spec / tasks / validation / roadmap / runs を読み、350ms デバウンスで更新する |
 | Sessions が空 | ワークスペースのパスと `~/.claude/projects/<encoded>` が一致しているか確認。`cwd` 不一致のセッションは意図的に除外 |
 | resume が高い | 履歴全体を送るため。プレビュー(課金なし)で確認してから再開する |
 
@@ -123,11 +124,11 @@ git push origin v0.9.0   # これで Release まで自動
 `RunsConsoleOptions.getPhaseActions()`(`src/extension.ts` 内)が返す `PhaseActions` を拡張し、
 `ui/runsConsole.ts` の `renderActions()` にボタンを追加します。
 
-### Overview の指標 / カードを増やす
+### Overview の指標 / 表 / イベントを増やす
 
 1. `core/overview.ts` の `OverviewModel` / `buildOverview()` に入力と集計を追加
 2. `test/overview.test.ts` に純粋ロジックのテストを追加
-3. `ui/overviewPanel.ts` の `renderKpi()` / `renderCard()` / `renderSpec()` に表示を追加
+3. `ui/overviewPanel.ts` の `renderKpis()` / `renderInProgress()` / `renderDependencies()` / `renderEvents()` に表示を追加
 4. クリック操作が必要なら Webview メッセージ(`OverviewMessage`)と `OverviewPanelOptions` を追加
 
 ### README を更新する

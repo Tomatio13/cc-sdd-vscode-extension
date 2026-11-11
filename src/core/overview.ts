@@ -1,550 +1,684 @@
-// Pure aggregation for the leader / PM overview board. The overview is built
-// from three sources that already exist: specs (approval state + tasks.md),
-// live runs in this window, and Claude Code session transcripts (which also
-// reveal work happening in other windows or terminals).
+// Pure aggregation for the team-facing spec overview. It reads repository
+// state plus the local run records that are actually visible in this window.
+// The UI labels that scope explicitly: a local run is not team-wide truth.
 import type { RunState } from '../run/claudeRunner';
-import type { SessionRecord } from './sessions';
-import { specCreatedAt, specUpdatedAt, type SpecRecord } from './repository';
-import { PHASE_META, nextStepLabel } from './phases';
+import { PHASE_META } from './phases';
 import {
-  PHASES,
-  nextStepState,
-  phaseStatus,
-  type NextStepState,
+  buildSpecProgress,
+  type SpecStage,
+  type Verification,
+} from './progress';
+import {
+  specCreatedAt,
+  specUpdatedAt,
+  type RoadmapInfo,
+  type SpecRecord,
+  type ValidationFile,
+} from './repository';
+import {
   type PhaseKey,
   type PhaseStatus,
+  type SpecJson,
 } from './spec';
-import { parseTasks } from './tasks';
 
-/** A session file touched within this window is treated as "active elsewhere". */
-export const ACTIVE_SESSION_MS = 3 * 60 * 1000;
+export type OverviewRunState = 'none' | 'idle' | 'running' | 'input' | 'failed';
 
-export type OverviewColumn = 'attention' | 'running' | 'done' | 'failed';
-export type OverviewTone = 'attention' | 'running' | 'done' | 'failed' | 'cancelled';
-
-export const OVERVIEW_COLUMNS: OverviewColumn[] = ['attention', 'running', 'done', 'failed'];
-
-export interface OverviewCard {
+export interface OverviewRun {
   id: string;
-  runId?: string;
-  sessionId?: string;
-  specId?: string;
-  reviewPhase?: PhaseKey;
-  source: 'live' | 'session' | 'review';
-  feature: string;
   skill: string;
-  column: OverviewColumn;
-  tone: OverviewTone;
-  label: string;
-  detail?: string;
-  permissionMode?: string;
+  status: RunState['status'];
+  pending?: 'permission' | 'question';
   startedAt: number;
-  updatedAt: number;
   endedAt?: number;
-  tokens?: number;
-  costUsd?: number;
-  pendingKind?: 'permission' | 'question';
 }
 
 export interface OverviewSpec {
   id: string;
   label: string;
-  phase: string;
-  createdAt: number;
+  stage: SpecStage;
+  completed: boolean;
+  implementationComplete: boolean;
   approvals: Record<PhaseKey, PhaseStatus>;
-  approvedCount: number;
   reviewPhases: PhaseKey[];
   tasksDone: number;
   tasksTotal: number;
-  nextKind: NextStepState['kind'];
-  nextLabel?: string;
-  active: number;
-  attention: number;
-  sessionsToday: number;
-  costTodayUsd?: number;
+  status: string;
+  statusDetail?: string;
+  blockedReason?: string;
+  blockedKind?: 'explicit' | 'dependency';
+  dependencies: string[];
+  hasDependencyInfo: boolean;
+  waitingOn: string[];
+  dependencyUnknown: string[];
+  downstream: string[];
+  verification: Verification;
+  runs: OverviewRun[];
+  runState: OverviewRunState;
+  runningCount: number;
+  pendingCount: number;
+  latestRunId?: string;
+  createdAt: number;
   updatedAt?: number;
-  reviewSince?: number;
+  /** Recorded completion signal (validation or last update) when verified. */
+  completedAt?: number;
+  /** Latest spec or run activity, used for stable in-group ordering. */
+  activityAt: number;
   dir: string;
   tasksPath: string;
   error?: string;
 }
 
 export interface OverviewKpi {
-  needsYou: number;
-  running: number;
-  failed: number;
+  inProgress: number;
+  blocked: number;
+  blockedExplicit: number;
+  blockedDependency: number;
+  reviewPending: number;
   reviews: number;
-  specs: number;
-  activeSpecs: number;
+  verificationPending: number;
+  verificationFailed: number;
+  done: number;
   tasksDone: number;
   tasksTotal: number;
-  sessionsToday: number;
-  spendTodayUsd: number;
+}
+
+export type OverviewDependencyKind = 'waiting' | 'ready' | 'downstream' | 'revalidation';
+
+export interface OverviewDependency {
+  kind: OverviewDependencyKind;
+  specId: string;
+  specLabel: string;
+  text: string;
+  related: { id: string; label: string }[];
+}
+
+export type OverviewEventKind = 'spec' | 'run' | 'verification';
+export type OverviewEventScope = 'repo' | 'local';
+
+export interface OverviewEvent {
+  id: string;
+  kind: OverviewEventKind;
+  scope: OverviewEventScope;
+  at: number;
+  specId?: string;
+  specLabel?: string;
+  runId?: string;
+  text: string;
 }
 
 export interface OverviewModel {
   generatedAt: number;
+  projectName: string;
+  dependencyInfo: 'available' | 'none';
   kpi: OverviewKpi;
-  columns: Record<OverviewColumn, OverviewCard[]>;
   specs: OverviewSpec[];
+  dependencies: OverviewDependency[];
+  events: OverviewEvent[];
 }
 
 export interface OverviewSpecInput {
   record: SpecRecord;
   tasks?: string;
+  validation?: ValidationFile;
 }
 
 export interface OverviewInput {
+  projectName: string;
   specs: OverviewSpecInput[];
   runs: RunState[];
-  sessions: SessionRecord[];
+  roadmap?: RoadmapInfo;
   now: number;
 }
 
-const shorten = (value: string, max = 160): string => {
-  const cleaned = value.replace(/\s+/g, ' ').trim();
-  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned;
-};
-
-const runCost = (run: RunState): number | undefined => {
-  if (typeof run.summary?.costUsd === 'number') {
-    return run.summary.costUsd;
+const readStringList = (value: unknown): string[] => {
+  if (typeof value === 'string') {
+    return value.trim() ? [value.trim()] : [];
   }
-  return typeof run.usageCostUsd === 'number' ? run.usageCostUsd : undefined;
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim());
+  }
+  return [];
 };
 
-const runTokens = (run: RunState): number | undefined => {
-  const usage = run.summary?.usage ?? run.usage;
-  if (!usage) {
+/** Explicit block metadata only; never inferred from age or past failures. */
+const explicitBlockReason = (spec: SpecJson | null): string | undefined => {
+  if (!spec) {
     return undefined;
   }
-  const total = usage.inputTokens + usage.outputTokens;
-  return total > 0 ? total : undefined;
-};
-
-const runDetail = (run: RunState): string | undefined => {
-  if (run.pending) {
-    if (run.pending.kind === 'permission') {
-      const summary = run.pending.summary ? `: ${run.pending.summary}` : '';
-      return shorten(`Permission for ${run.pending.toolName ?? 'tool'}${summary}`);
-    }
-    const questions = (run.pending.questions ?? []).map((question) => question.question);
-    if (questions.length > 0) {
-      return shorten(questions.join(' / '));
+  const raw = spec as Record<string, unknown>;
+  for (const key of ['blocked_reason', 'blockedReason']) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
     }
   }
-  for (let index = run.segments.length - 1; index >= 0; index -= 1) {
-    const segment = run.segments[index];
-    if (segment.kind === 'toolresult' || !segment.text.trim()) {
-      continue;
+  const blocked = raw.blocked;
+  if (typeof blocked === 'string' && blocked.trim()) {
+    return blocked.trim();
+  }
+  if (blocked && typeof blocked === 'object') {
+    const reason = (blocked as Record<string, unknown>).reason;
+    if (typeof reason === 'string' && reason.trim()) {
+      return reason.trim();
     }
-    return shorten(segment.text);
   }
-  return undefined;
+  const blockers = readStringList(raw.blockers ?? raw.blocked_by ?? raw.blockedBy);
+  return blockers.length > 0 ? blockers.join(', ') : undefined;
 };
 
-const runColumn = (run: RunState): OverviewColumn => {
-  if (run.pending) {
-    return 'attention';
-  }
-  switch (run.status) {
-    case 'running':
-      return 'running';
-    case 'done':
-      return 'done';
-    case 'error':
-    case 'cancelled':
-      return 'failed';
-    default:
-      return 'running';
-  }
-};
+const toOverviewRun = (run: RunState): OverviewRun => ({
+  id: run.id,
+  skill: run.skill,
+  status: run.status,
+  pending: run.pending?.kind,
+  startedAt: run.startedAt,
+  endedAt: run.endedAt,
+});
 
-const runTone = (run: RunState): OverviewTone => {
-  if (run.pending) {
-    return 'attention';
-  }
-  switch (run.status) {
-    case 'running':
-      return 'running';
-    case 'done':
-      return 'done';
-    case 'cancelled':
-      return 'cancelled';
-    default:
-      return 'failed';
-  }
-};
+const runSummary = (
+  runs: OverviewRun[],
+): Pick<OverviewSpec, 'runState' | 'runningCount' | 'pendingCount' | 'latestRunId'> => {
+  const pending = runs.filter((run) => run.pending !== undefined);
+  const running = runs.filter((run) => run.status === 'running' && run.pending === undefined);
+  const latest = [...runs].sort(
+    (left, right) => (right.endedAt ?? right.startedAt) - (left.endedAt ?? left.startedAt),
+  )[0];
+  const latestFailed = latest?.status === 'error' ? latest : undefined;
+  const latestAction = pending[0] ?? running[0] ?? latest;
 
-const runLabel = (run: RunState): string => {
-  if (run.pending) {
-    return run.pending.kind === 'question' ? 'Answer needed' : 'Permission needed';
-  }
-  switch (run.status) {
-    case 'running':
-      return 'Running';
-    case 'done':
-      return 'Done';
-    case 'error':
-      return 'Failed';
-    case 'cancelled':
-      return 'Cancelled';
-    default:
-      return run.status;
-  }
-};
+  const runState: OverviewRunState =
+    pending.length > 0
+      ? 'input'
+      : running.length > 0
+        ? 'running'
+        : latestFailed
+          ? 'failed'
+          : runs.length > 0
+            ? 'idle'
+            : 'none';
 
-const toRunCard = (run: RunState, now: number): OverviewCard | undefined => {
-  if (run.status === 'preview') {
-    return undefined;
-  }
-  const card: OverviewCard = {
-    id: `run:${run.id}`,
-    runId: run.id,
-    sessionId: run.sessionId,
-    source: 'live',
-    feature: run.feature || run.skill,
-    skill: run.skill,
-    column: runColumn(run),
-    tone: runTone(run),
-    label: runLabel(run),
-    startedAt: run.startedAt,
-    updatedAt: run.endedAt ?? (run.status === 'running' ? now : run.startedAt),
-    endedAt: run.endedAt,
+  return {
+    runState,
+    runningCount: running.length,
+    pendingCount: pending.length,
+    latestRunId: latestAction?.id,
   };
-  const detail = runDetail(run);
-  if (detail) {
-    card.detail = detail;
-  }
-  if (run.permissionMode) {
-    card.permissionMode = run.permissionMode;
-  }
-  const tokens = runTokens(run);
-  if (tokens !== undefined) {
-    card.tokens = tokens;
-  }
-  const cost = runCost(run);
-  if (cost !== undefined) {
-    card.costUsd = cost;
-  }
-  if (run.pending) {
-    card.pendingKind = run.pending.kind;
-    card.updatedAt = now;
-  }
-  return card;
 };
 
-const toSessionCard = (session: SessionRecord, now: number): OverviewCard | undefined => {
-  const age = now - session.updatedAt;
-  if (age < 0 || age > ACTIVE_SESSION_MS) {
-    return undefined;
-  }
-  // A recent mtime is not enough: completed transcripts keep receiving
-  // metadata entries. Only surface sessions whose tail says work is still in
-  // flight (or blocked on a question).
-  const state = session.activity?.state;
-  if (state === 'stopped' || state === 'unknown') {
-    return undefined;
-  }
-  const waiting = state === 'waiting';
-  const card: OverviewCard = {
-    id: `session:${session.id}`,
-    sessionId: session.id,
-    source: 'session',
-    feature: session.feature ?? session.title,
-    skill: session.skill ?? 'session',
-    column: waiting ? 'attention' : 'running',
-    tone: waiting ? 'attention' : 'running',
-    label: waiting ? 'Question elsewhere' : 'Active elsewhere',
-    startedAt: session.startedAt ?? session.updatedAt,
-    updatedAt: session.updatedAt,
-  };
-  if (waiting) {
-    card.pendingKind = 'question';
-  }
-  if (session.lastMessage) {
-    card.detail = shorten(session.lastMessage);
-  }
-  const tokens = session.usage
-    ? session.usage.inputTokens + session.usage.outputTokens
-    : undefined;
-  if (tokens !== undefined && tokens > 0) {
-    card.tokens = tokens;
-  }
-  if (typeof session.costUsd === 'number') {
-    card.costUsd = session.costUsd;
-  }
-  return card;
-};
-
-const startOfDay = (now: number): number => {
-  const date = new Date(now);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
-};
-
-const parseUpdatedAt = (value: string | undefined): number | undefined => {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-};
-
-const buildSpec = (
-  input: OverviewSpecInput,
-  cards: OverviewCard[],
-  sessions: SessionRecord[],
-  dayStart: number,
-): OverviewSpec => {
+const buildBaseSpec = (input: OverviewSpecInput, runs: RunState[]): OverviewSpec => {
   const { record } = input;
-  const tasks = parseTasks(input.tasks ?? '');
-  const done = tasks.filter((task) => task.checked).length;
+  const progress = buildSpecProgress(record, input.tasks, input.validation);
 
-  const approvals = {} as Record<PhaseKey, PhaseStatus>;
-  const reviewPhases: PhaseKey[] = [];
-  for (const phase of PHASES) {
-    approvals[phase] = phaseStatus(record.spec, phase, record.exists[phase]);
-    const approval = record.spec?.approvals[phase];
-    if (approval?.generated === true && approval.approved !== true) {
-      reviewPhases.push(phase);
-    }
-  }
+  const specRuns = runs
+    .filter((run) => run.feature === record.id && run.status !== 'preview')
+    .map(toOverviewRun)
+    .sort((left, right) => right.startedAt - left.startedAt);
+  const runInfo = runSummary(specRuns);
 
-  const step = nextStepState(record.spec, { done, total: tasks.length });
-  const createdAt = specCreatedAt(record);
-
-  const matching = cards.filter(
-    (card) => card.feature === record.id && card.column !== 'done' && card.column !== 'failed',
+  const updatedAt = specUpdatedAt(record);
+  const completedAt = progress.completed
+    ? Math.max(updatedAt ?? 0, progress.verification.at ?? 0) || undefined
+    : undefined;
+  const activityAt = Math.max(
+    updatedAt ?? 0,
+    progress.verification.at ?? 0,
+    ...specRuns.map((run) => run.endedAt ?? run.startedAt),
   );
-  const sessionFeature = record.id;
-  const sessionCost = sessions
-    .filter(
-      (session) =>
-        session.feature === sessionFeature &&
-        session.updatedAt >= dayStart &&
-        typeof session.costUsd === 'number',
-    )
-    .reduce((total, session) => total + (session.costUsd ?? 0), 0);
 
-  const spec: OverviewSpec = {
+  return {
     id: record.id,
     label: record.spec?.feature_name?.trim() || record.id,
-    phase: record.spec?.phase ?? 'unknown',
-    createdAt,
-    approvals,
-    approvedCount: PHASES.filter((phase) => record.spec?.approvals[phase].approved === true)
-      .length,
-    reviewPhases,
-    tasksDone: done,
-    tasksTotal: tasks.length,
-    nextKind: step.kind,
-    active: matching.filter((card) => card.column === 'running').length,
-    attention: matching.filter((card) => card.column === 'attention').length,
-    sessionsToday: sessions.filter(
-      (session) => session.feature === sessionFeature && session.updatedAt >= dayStart,
-    ).length,
+    stage: progress.stage,
+    completed: progress.completed,
+    implementationComplete: progress.implementationComplete,
+    approvals: progress.approvals,
+    reviewPhases: progress.reviewPhases,
+    tasksDone: progress.tasksDone,
+    tasksTotal: progress.tasksTotal,
+    status: '',
+    dependencies: [],
+    hasDependencyInfo: false,
+    waitingOn: [],
+    dependencyUnknown: [],
+    downstream: [],
+    verification: progress.verification,
+    runs: specRuns,
+    ...runInfo,
+    createdAt: specCreatedAt(record),
+    updatedAt,
+    completedAt,
+    activityAt,
     dir: record.dir,
     tasksPath: record.artifacts.tasks,
+    error: record.specError,
   };
+};
 
-  const nextLabel = nextStepLabel(step);
-  if (nextLabel) {
-    spec.nextLabel = nextLabel;
+const finalizeStatus = (
+  spec: OverviewSpec,
+  explicitBlock: string | undefined,
+  byId: Map<string, OverviewSpec>,
+): void => {
+  if (spec.completed) {
+    spec.status = 'Verified';
+    return;
+  }
+  if (spec.error) {
+    spec.status = 'spec.json invalid';
+    spec.statusDetail = spec.error;
+    return;
   }
 
-  if (sessionCost > 0) {
-    spec.costTodayUsd = sessionCost;
+  const labelFor = (id: string): string => byId.get(id)?.label ?? id;
+  const dependencyWait = spec.waitingOn.length > 0;
+
+  if (explicitBlock) {
+    spec.blockedReason = explicitBlock;
+    spec.blockedKind = 'explicit';
+  } else if (dependencyWait) {
+    spec.blockedKind = 'dependency';
+    spec.blockedReason = `Waiting on ${spec.waitingOn.map(labelFor).join(', ')}`;
   }
-  const reviewSince = parseUpdatedAt(record.spec?.updated_at);
-  if (reviewSince !== undefined) {
-    spec.reviewSince = reviewSince;
+
+  if (explicitBlock) {
+    spec.status = `Blocked: ${explicitBlock}`;
+    return;
   }
-  let updatedAt = specUpdatedAt(record);
-  for (const session of sessions) {
-    if (session.feature === sessionFeature && session.updatedAt > (updatedAt ?? 0)) {
-      updatedAt = session.updatedAt;
+  if (spec.dependencyUnknown.length > 0) {
+    spec.status = `Dependency status unknown: ${spec.dependencyUnknown.map(labelFor).join(', ')}`;
+    return;
+  }
+  if (spec.waitingOn.length > 0) {
+    spec.status = `Waiting on ${spec.waitingOn.map(labelFor).join(', ')}`;
+    return;
+  }
+  if (spec.runState === 'input') {
+    spec.status =
+      spec.pendingCount > 1 ? `Input waiting (${spec.pendingCount})` : 'Input waiting';
+    if (spec.runningCount > 0) {
+      spec.statusDetail = `${spec.runningCount} more running`;
+    }
+    return;
+  }
+  if (spec.runState === 'running') {
+    spec.status = spec.runningCount > 1 ? `${spec.runningCount} running` : 'Running';
+    return;
+  }
+  if (spec.implementationComplete) {
+    if (spec.verification.status === 'failed') {
+      spec.status = 'Verification failed';
+      spec.statusDetail = spec.verification.decision;
+      return;
+    }
+    if (spec.verification.status === 'stale') {
+      spec.status = 'Verification result is stale';
+      spec.statusDetail = spec.verification.detail;
+      return;
+    }
+    if (spec.verification.status === 'manual') {
+      spec.status = 'Manual verification required';
+      return;
+    }
+    if (spec.verification.status === 'unconfirmed') {
+      spec.status = 'Verification result unconfirmed';
+      spec.statusDetail = spec.verification.detail;
+      return;
+    }
+    if (spec.verification.status === 'error') {
+      spec.status = 'Verification info unavailable';
+      spec.statusDetail = spec.verification.detail;
+      return;
+    }
+    if (spec.stage === 'verification') {
+      spec.status = 'Verification pending';
+      return;
     }
   }
-  for (const card of matching) {
-    if (card.updatedAt > (updatedAt ?? 0)) {
-      updatedAt = card.updatedAt;
+  if (spec.reviewPhases.length > 0) {
+    spec.status = `Review pending: ${PHASE_META[spec.reviewPhases[0]].label}`;
+    if (spec.runState === 'failed') {
+      spec.statusDetail = 'Last run failed';
+    }
+    return;
+  }
+  if (spec.runState === 'failed') {
+    spec.status = 'Last run failed';
+    spec.statusDetail = 'No active run';
+    return;
+  }
+  if (spec.runState === 'none') {
+    spec.status = 'No run record';
+    return;
+  }
+  if (spec.runState === 'idle') {
+    spec.status = 'No active run';
+    return;
+  }
+  spec.status = 'In progress';
+};
+
+const buildDependencies = (
+  specs: OverviewSpec[],
+  roadmap: RoadmapInfo | undefined,
+): OverviewDependency[] => {
+  if (!roadmap) {
+    return [];
+  }
+
+  const byId = new Map(specs.map((spec) => [spec.id, spec]));
+  const notes: OverviewDependency[] = [];
+  const labelFor = (id: string): string => byId.get(id)?.label ?? id;
+
+  for (const spec of specs) {
+    if (spec.completed || spec.error) {
+      continue;
+    }
+    const waiting = [...spec.waitingOn, ...spec.dependencyUnknown];
+    if (waiting.length > 0) {
+      notes.push({
+        kind: 'waiting',
+        specId: spec.id,
+        specLabel: spec.label,
+        text:
+          spec.dependencyUnknown.length > 0
+            ? `Dependency status unknown: ${spec.dependencyUnknown.map(labelFor).join(', ')}`
+            : `Waiting on ${spec.waitingOn.map(labelFor).join(', ')}`,
+        related: waiting.map((id) => ({ id, label: labelFor(id) })),
+      });
     }
   }
-  if (updatedAt !== undefined) {
-    spec.updatedAt = updatedAt;
+
+  for (const spec of specs) {
+    if (
+      spec.completed ||
+      spec.blockedReason ||
+      !spec.hasDependencyInfo ||
+      spec.waitingOn.length > 0 ||
+      spec.dependencyUnknown.length > 0
+    ) {
+      continue;
+    }
+    if (spec.stage === 'requirements' && spec.approvals.requirements === 'missing') {
+      notes.push({
+        kind: 'ready',
+        specId: spec.id,
+        specLabel: spec.label,
+        text: 'Dependency conditions satisfied; ready to start',
+        related: spec.dependencies.map((id) => ({ id, label: labelFor(id) })),
+      });
+    }
   }
-  if (record.specError) {
-    spec.error = record.specError;
+
+  for (const spec of specs) {
+    if (spec.completed || spec.error || spec.downstream.length === 0) {
+      continue;
+    }
+    notes.push({
+      kind: 'downstream',
+      specId: spec.id,
+      specLabel: spec.label,
+      text: `Downstream specs waiting: ${spec.downstream
+        .map(labelFor)
+        .join(', ')}`,
+      related: spec.downstream.map((id) => ({ id, label: labelFor(id) })),
+    });
   }
-  return spec;
+
+  for (const spec of specs) {
+    if (!spec.implementationComplete || spec.verification.status !== 'stale') {
+      continue;
+    }
+    notes.push({
+      kind: 'revalidation',
+      specId: spec.id,
+      specLabel: spec.label,
+      text: 'Verification result is older than the current artifacts',
+      related: [],
+    });
+  }
+
+  return notes;
+};
+
+const buildEvents = (
+  specs: OverviewSpec[],
+  runs: RunState[],
+  now: number,
+): OverviewEvent[] => {
+  const byId = new Map(specs.map((spec) => [spec.id, spec]));
+  const events: OverviewEvent[] = [];
+
+  for (const spec of specs) {
+    if (spec.createdAt > 0) {
+      events.push({
+        id: `spec:${spec.id}:created`,
+        kind: 'spec',
+        scope: 'repo',
+        at: spec.createdAt,
+        specId: spec.id,
+        specLabel: spec.label,
+        text: 'Spec added',
+      });
+    }
+    if (spec.updatedAt && spec.updatedAt > spec.createdAt) {
+      events.push({
+        id: `spec:${spec.id}:updated`,
+        kind: 'spec',
+        scope: 'repo',
+        at: spec.updatedAt,
+        specId: spec.id,
+        specLabel: spec.label,
+        text: 'Spec updated',
+      });
+    }
+    if (spec.verification.at) {
+      events.push({
+        id: `verification:${spec.id}`,
+        kind: 'verification',
+        scope: 'repo',
+        at: spec.verification.at,
+        specId: spec.id,
+        specLabel: spec.label,
+        text: spec.verification.decision
+          ? `Validation recorded: ${spec.verification.decision}`
+          : 'Validation report updated',
+      });
+    }
+  }
+
+  for (const run of runs) {
+    if (run.status === 'preview') {
+      continue;
+    }
+    const spec = byId.get(run.feature);
+    if (!spec) {
+      continue;
+    }
+    events.push({
+      id: `run:${run.id}:started`,
+      kind: 'run',
+      scope: 'local',
+      at: run.startedAt,
+      specId: spec.id,
+      specLabel: spec.label,
+      runId: run.id,
+      text: `Run started: /${run.skill}`,
+    });
+    if (run.endedAt) {
+      const outcome =
+        run.status === 'done'
+          ? 'Run done'
+          : run.status === 'cancelled'
+            ? 'Run cancelled'
+            : run.status === 'error'
+              ? 'Run failed'
+              : 'Run finished';
+      events.push({
+        id: `run:${run.id}:ended`,
+        kind: 'run',
+        scope: 'local',
+        at: run.endedAt,
+        specId: spec.id,
+        specLabel: spec.label,
+        runId: run.id,
+        text: outcome,
+      });
+    }
+    if (run.pending) {
+      events.push({
+        id: `run:${run.id}:pending`,
+        kind: 'run',
+        scope: 'local',
+        at: now,
+        specId: spec.id,
+        specLabel: spec.label,
+        runId: run.id,
+        text:
+          run.pending.kind === 'question'
+            ? 'Input waiting: question'
+            : 'Input waiting: permission',
+      });
+    }
+  }
+
+  return events.sort((left, right) => right.at - left.at).slice(0, 50);
+};
+
+const rank = (spec: OverviewSpec): number => {
+  if (
+    spec.error ||
+    spec.blockedReason ||
+    spec.runState === 'failed' ||
+    (spec.implementationComplete && spec.verification.status === 'failed') ||
+    (spec.implementationComplete && spec.verification.status === 'error')
+  ) {
+    return 0;
+  }
+  if (spec.runState === 'running') {
+    return 1;
+  }
+  if (spec.runState === 'input' || spec.reviewPhases.length > 0 || spec.dependencyUnknown.length > 0) {
+    return 2;
+  }
+  return 3;
 };
 
 /** Builds the overview model. Pure: no file system or VS Code access. */
 export const buildOverview = (input: OverviewInput): OverviewModel => {
-  const { now, runs, sessions, specs } = input;
-  const dayStart = startOfDay(now);
+  const { projectName, roadmap, runs, specs, now } = input;
+  const overviewSpecs = specs.map((spec) => buildBaseSpec(spec, runs));
+  const byId = new Map(overviewSpecs.map((spec) => [spec.id, spec]));
+  const dependencyInfo: OverviewModel['dependencyInfo'] =
+    roadmap && (roadmap.order.length > 0 || Object.keys(roadmap.deps).length > 0)
+      ? 'available'
+      : 'none';
 
-  const liveSessionIds = new Set<string>();
-  const liveKeys = new Set<string>();
-  const cards: OverviewCard[] = [];
-  for (const run of runs) {
-    const card = toRunCard(run, now);
-    if (!card) {
-      continue;
-    }
-    if (run.sessionId) {
-      liveSessionIds.add(run.sessionId);
-    }
-    liveKeys.add(`${run.feature}\u0000${run.skill}`);
-    cards.push(card);
-  }
-
-  for (const session of sessions) {
-    if (liveSessionIds.has(session.id)) {
-      continue;
-    }
-    if (liveKeys.has(`${session.feature ?? ''}\u0000${session.skill ?? ''}`)) {
-      continue;
-    }
-    const card = toSessionCard(session, now);
-    if (card) {
-      cards.push(card);
-    }
-  }
-
-  const columns: Record<OverviewColumn, OverviewCard[]> = {
-    attention: [],
-    running: [],
-    done: [],
-    failed: [],
-  };
-  for (const card of cards) {
-    columns[card.column].push(card);
-  }
-  columns.attention.sort((left, right) => left.startedAt - right.startedAt);
-  columns.running.sort((left, right) => left.startedAt - right.startedAt);
-  columns.done.sort((left, right) => (right.endedAt ?? right.startedAt) - (left.endedAt ?? left.startedAt));
-  columns.failed.sort((left, right) => (right.endedAt ?? right.startedAt) - (left.endedAt ?? left.startedAt));
-  for (const column of OVERVIEW_COLUMNS) {
-    columns[column] = columns[column].slice(0, 20);
-  }
-
-  const overviewSpecs = specs
-    .map((spec) => buildSpec(spec, cards, sessions, dayStart))
-    .sort((left, right) => {
-      const created = right.createdAt - left.createdAt;
-      return created !== 0 ? created : left.label.localeCompare(right.label);
-    });
-
-  // Approvals are "needs you" work too. Putting them on the board keeps the
-  // KPI and the attention column consistent, and gives them an open action.
   for (const spec of overviewSpecs) {
-    for (const phase of spec.reviewPhases) {
-      const waitingSince = spec.reviewSince ?? spec.updatedAt ?? now;
-      columns.attention.push({
-        id: `review:${spec.id}:${phase}`,
-        specId: spec.id,
-        reviewPhase: phase,
-        source: 'review',
-        feature: spec.id,
-        skill: 'approval',
-        column: 'attention',
-        tone: 'attention',
-        label: `Review ${PHASE_META[phase].label}`,
-        detail: `${PHASE_META[phase].file} is waiting for approval.`,
-        startedAt: waitingSince,
-        updatedAt: waitingSince,
-      });
+    spec.dependencies = dependencyInfo === 'available' ? (roadmap?.deps[spec.id] ?? []) : [];
+    spec.hasDependencyInfo =
+      dependencyInfo === 'available' &&
+      roadmap !== undefined &&
+      (roadmap.order.includes(spec.id) ||
+        Object.prototype.hasOwnProperty.call(roadmap.deps, spec.id));
+    spec.waitingOn = spec.dependencies.filter((id) => {
+      const dependency = byId.get(id);
+      return dependency !== undefined && !dependency.completed;
+    });
+    spec.dependencyUnknown = spec.dependencies.filter((id) => !byId.has(id));
+    if (!spec.hasDependencyInfo) {
+      spec.waitingOn = [];
+      spec.dependencyUnknown = [];
+      spec.dependencies = [];
     }
   }
-  columns.attention.sort((left, right) => left.startedAt - right.startedAt);
-  const needsYou = columns.attention.length;
-  columns.attention = columns.attention.slice(0, 20);
 
-  const tasksDone = overviewSpecs.reduce((total, spec) => total + spec.tasksDone, 0);
-  const tasksTotal = overviewSpecs.reduce((total, spec) => total + spec.tasksTotal, 0);
-
-  // Spend today: sessions hold cumulative cost; live runs may be ahead of the
-  // last transcript flush, so take the larger value per session.
-  const liveCostBySession = new Map<string, number>();
-  let spendTodayUsd = 0;
-  for (const run of runs) {
-    const cost = runCost(run);
-    if (cost === undefined) {
+  for (const spec of overviewSpecs) {
+    if (spec.completed || spec.error) {
       continue;
     }
-    if ((run.endedAt ?? run.startedAt) < dayStart) {
-      continue;
-    }
-    if (run.sessionId) {
-      liveCostBySession.set(
-        run.sessionId,
-        Math.max(liveCostBySession.get(run.sessionId) ?? 0, cost),
-      );
-    } else {
-      spendTodayUsd += cost;
+    for (const dependencyId of spec.dependencies) {
+      const dependency = byId.get(dependencyId);
+      if (dependency) {
+        dependency.downstream.push(spec.id);
+      }
     }
   }
 
-  let sessionsToday = 0;
-  for (const session of sessions) {
-    if (session.updatedAt < dayStart) {
-      continue;
+  for (const inputSpec of specs) {
+    const spec = byId.get(inputSpec.record.id);
+    if (spec) {
+      finalizeStatus(spec, explicitBlockReason(inputSpec.record.spec), byId);
     }
-    sessionsToday += 1;
-    const liveCost = liveCostBySession.get(session.id);
-    if (liveCost !== undefined) {
-      spendTodayUsd += Math.max(liveCost, session.costUsd ?? 0);
-      liveCostBySession.delete(session.id);
-    } else if (typeof session.costUsd === 'number') {
-      spendTodayUsd += session.costUsd;
-    }
-  }
-  for (const cost of liveCostBySession.values()) {
-    spendTodayUsd += cost;
   }
 
-  const failed = runs.filter(
-    (run) =>
-      run.status === 'error' &&
-      (run.endedAt ?? run.startedAt) >= dayStart,
-  ).length;
+  const inProgress = overviewSpecs.filter((spec) => !spec.completed);
+  inProgress.sort((left, right) => {
+    const byRank = rank(left) - rank(right);
+    if (byRank !== 0) {
+      return byRank;
+    }
+    const byUpdated = right.activityAt - left.activityAt;
+    return byUpdated !== 0 ? byUpdated : left.label.localeCompare(right.label);
+  });
+  const completed = overviewSpecs
+    .filter((spec) => spec.completed)
+    .sort((left, right) => {
+      const byUpdated = right.activityAt - left.activityAt;
+      return byUpdated !== 0 ? byUpdated : left.label.localeCompare(right.label);
+    });
+  const sortedSpecs = [...inProgress, ...completed];
 
   return {
     generatedAt: now,
+    projectName,
+    dependencyInfo,
     kpi: {
-      needsYou,
-      running: columns.running.length,
-      failed,
-      reviews: overviewSpecs.reduce((total, spec) => total + spec.reviewPhases.length, 0),
-      specs: overviewSpecs.length,
-      activeSpecs: overviewSpecs.filter((spec) => spec.active > 0).length,
-      tasksDone,
-      tasksTotal,
-      sessionsToday,
-      spendTodayUsd,
+      inProgress: inProgress.length,
+      blocked: sortedSpecs.filter((spec) => spec.blockedReason !== undefined).length,
+      blockedExplicit: sortedSpecs.filter((spec) => spec.blockedKind === 'explicit').length,
+      blockedDependency: sortedSpecs.filter((spec) => spec.blockedKind === 'dependency').length,
+      reviewPending: sortedSpecs.filter((spec) => spec.reviewPhases.length > 0).length,
+      reviews: sortedSpecs.reduce((total, spec) => total + spec.reviewPhases.length, 0),
+      verificationPending: sortedSpecs.filter(
+        (spec) => spec.implementationComplete && !spec.completed,
+      ).length,
+      verificationFailed: sortedSpecs.filter(
+        (spec) => spec.implementationComplete && spec.verification.status === 'failed',
+      ).length,
+      done: completed.length,
+      tasksDone: sortedSpecs.reduce((total, spec) => total + spec.tasksDone, 0),
+      tasksTotal: sortedSpecs.reduce((total, spec) => total + spec.tasksTotal, 0),
     },
-    columns,
-    specs: overviewSpecs,
+    specs: sortedSpecs,
+    dependencies: buildDependencies(
+      sortedSpecs,
+      dependencyInfo === 'available' ? roadmap : undefined,
+    ),
+    events: buildEvents(sortedSpecs, runs, now),
   };
 };
 
 /** Empty model used before a workspace is available. */
-export const emptyOverview = (now: number): OverviewModel => ({
+export const emptyOverview = (now: number, projectName = 'Workspace'): OverviewModel => ({
   generatedAt: now,
+  projectName,
+  dependencyInfo: 'none',
   kpi: {
-    needsYou: 0,
-    running: 0,
-    failed: 0,
+    inProgress: 0,
+    blocked: 0,
+    blockedExplicit: 0,
+    blockedDependency: 0,
+    reviewPending: 0,
     reviews: 0,
-    specs: 0,
-    activeSpecs: 0,
+    verificationPending: 0,
+    verificationFailed: 0,
+    done: 0,
     tasksDone: 0,
     tasksTotal: 0,
-    sessionsToday: 0,
-    spendTodayUsd: 0,
   },
-  columns: { attention: [], running: [], done: [], failed: [] },
   specs: [],
+  dependencies: [],
+  events: [],
 });

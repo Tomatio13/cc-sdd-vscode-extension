@@ -25,8 +25,13 @@ export const buildInvocation = (
   config: AgentConfig,
   skill: string,
   feature = '',
+  args = '',
 ): Invocation => {
-  const suffix = feature ? ` ${feature}` : '';
+  const suffix = [feature, args]
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => ` ${part}`)
+    .join('');
   const prompt = config.agent === 'codex' ? `$${skill}${suffix}` : `/${skill}${suffix}`;
 
   switch (config.agent) {
@@ -49,7 +54,8 @@ export const buildInvocation = (
         command: template
           .replace(/\$\{prompt\}/g, prompt)
           .replace(/\$\{skill\}/g, skill)
-          .replace(/\$\{feature\}/g, feature),
+          .replace(/\$\{feature\}/g, feature)
+          .replace(/\$\{args\}/g, args),
       };
     }
     default:

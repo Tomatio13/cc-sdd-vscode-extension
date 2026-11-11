@@ -5,6 +5,7 @@ import {
   readArtifact,
   readRoadmap,
   readSteering,
+  readValidation,
   resolveKiroDir,
   toggleTaskCheckbox,
   updateApproval,
@@ -12,7 +13,7 @@ import {
 } from './core/repository';
 import {
   PHASES,
-  nextAction,
+  nextStepState,
   phaseStatus,
   type PhaseKey,
 } from './core/spec';
@@ -26,8 +27,9 @@ import {
   VALIDATE_GAP_SKILL,
   VALIDATE_IMPL_SKILL,
 } from './core/phases';
-import type { ParsedTask } from './core/tasks';
+import { parseTasks, type ParsedTask } from './core/tasks';
 import { validateArtifact } from './core/validation';
+import { buildSpecProgress } from './core/progress';
 import { claudeProjectDir, formatWhen, listSessions, readTranscriptSegments, type SessionRecord } from './core/sessions';
 import {
   runInstall,
@@ -37,13 +39,13 @@ import {
 } from './launch/agentLauncher';
 import { SpecTreeProvider, type SpecSort } from './ui/specTree';
 import { StatusBar } from './ui/statusBar';
-import { OverviewStatusBar } from './ui/overviewStatusBar';
+import { RunsStatusBar } from './ui/runsStatusBar';
 import { TaskTreeProvider } from './ui/taskTree';
 import { SessionsTreeProvider } from './ui/sessionsTree';
 import { RunsConsole, type PhaseActions } from './ui/runsConsole';
 import { OverviewPanel } from './ui/overviewPanel';
 import { buildOverview, emptyOverview } from './core/overview';
-import { resolveClaudeExecutable } from './run/claudeRunner';
+import { resolveClaudeExecutable, type RunState } from './run/claudeRunner';
 
 interface PhaseTarget {
   record: SpecRecord;
@@ -119,7 +121,7 @@ const taskTarget = (value: unknown): TaskTarget | undefined => {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const statusBar = new StatusBar();
-  const overviewStatusBar = new OverviewStatusBar();
+  const runsStatusBar = new RunsStatusBar();
   let activeSpecId = context.workspaceState.get<string>('ccSdd.activeSpec');
   let watcher: vscode.FileSystemWatcher | undefined;
   let sessionsWatcher: vscode.FileSystemWatcher | undefined;
@@ -147,9 +149,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return listSpecs(root, kiroDir());
   };
 
+  const progressFor = async (record: SpecRecord) => {
+    const [tasks, validation] = await Promise.all([
+      readArtifact(record, 'tasks'),
+      readValidation(record),
+    ]);
+    return buildSpecProgress(record, tasks, validation);
+  };
+
   const specProvider = new SpecTreeProvider(
     loadSpecs,
     (record) => readArtifact(record, 'tasks'),
+    (record) => readValidation(record),
+    () => runsConsole.getRuns(),
     async () => {
       const root = workspaceRoot();
       if (!root) {
@@ -178,12 +190,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return records.find((record) => record.id === activeSpecId);
   };
 
-  const taskProvider = new TaskTreeProvider((record) => readArtifact(record, 'tasks'));
+  const taskProvider = new TaskTreeProvider(
+    (record) => readArtifact(record, 'tasks'),
+    (record) => readValidation(record),
+    () => runsConsole.getRuns(),
+  );
 
-  const sessionsProvider = new SessionsTreeProvider(async () => {
-    const root = workspaceRoot();
-    return root ? listSessions(root) : [];
-  });
+  const sessionsProvider = new SessionsTreeProvider(
+    async () => {
+      const root = workspaceRoot();
+      return root ? listSessions(root) : [];
+    },
+    loadSpecs,
+    () => runsConsole.getRuns(),
+  );
 
   const showError = (error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
@@ -214,11 +234,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const refresh = async (): Promise<void> => {
     const active = await getActiveSpec();
+    const progress = active ? await progressFor(active) : undefined;
     specProvider.setActive(active?.id);
     specProvider.refresh();
     taskProvider.setActive(active);
-    statusBar.update(active);
-    sessionsProvider.refresh();
+    statusBar.update(active, progress);
+    sessionsProvider.setActive(active);
     overviewPanel?.scheduleRefresh(150);
 
     if (activeSpecId) {
@@ -274,7 +295,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
     specProvider.setActive(record.id);
     taskProvider.setActive(record);
-    statusBar.update(record);
+    sessionsProvider.setActive(record);
+    statusBar.update(record, await progressFor(record));
   };
 
   const runPhase = async (record: SpecRecord, phase: PhaseKey): Promise<void> => {
@@ -381,10 +403,60 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await refresh();
   };
 
-  const runImplementation = async (record: SpecRecord): Promise<void> => {
+  const activeRunFor = (record: SpecRecord, skills?: string[]): RunState | undefined =>
+    runsConsole
+      .getRuns()
+      .find(
+        (run) =>
+          run.feature === record.id &&
+          (run.pending !== undefined || run.status === 'running') &&
+          (skills === undefined || skills.includes(run.skill)),
+      );
+
+  const taskIdsFromPrompt = (prompt: string): string[] =>
+    (prompt.match(/(?:^|\s)(\d+(?:\.\d+)*)(?=\s|$)/g) ?? []).map((match) => match.trim());
+
+  const activeImplementationRun = (
+    record: SpecRecord,
+    taskIds?: string[],
+  ): RunState | undefined => {
+    const active = runsConsole
+      .getRuns()
+      .filter(
+        (run) =>
+          run.feature === record.id &&
+          run.skill === IMPLEMENTATION_SKILL &&
+          (run.pending !== undefined || run.status === 'running'),
+      );
+    if (active.length === 0) {
+      return undefined;
+    }
+    if (!taskIds || taskIds.length === 0) {
+      return active[0];
+    }
+    const requested = new Set(taskIds);
+    return active.find((run) => {
+      const running = taskIdsFromPrompt(run.prompt);
+      return running.length === 0 || running.some((id) => requested.has(id));
+    });
+  };
+
+  const runImplementation = async (
+    record: SpecRecord,
+    taskIds?: string[],
+  ): Promise<void> => {
     const root = workspaceRoot();
     if (!root) {
       void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
+      return;
+    }
+
+    const active = activeImplementationRun(record, taskIds);
+    if (active) {
+      runsConsole.openRun(active.id);
+      void vscode.window.showInformationMessage(
+        `cc-sdd: the requested implementation target is already running. Opened it instead.`,
+      );
       return;
     }
 
@@ -400,7 +472,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     await selectSpec(record);
-    await runSkill(agentConfig(), root, record.id, IMPLEMENTATION_SKILL, runSkillOptions);
+    await runSkill(agentConfig(), root, record.id, IMPLEMENTATION_SKILL, {
+      ...runSkillOptions,
+      args: taskIds && taskIds.length > 0 ? taskIds.join(' ') : undefined,
+    });
   };
 
   const runValidateImpl = async (record: SpecRecord): Promise<void> => {
@@ -410,8 +485,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
+    const active = activeRunFor(record, [VALIDATE_IMPL_SKILL]);
+    if (active) {
+      runsConsole.openRun(active.id);
+      void vscode.window.showInformationMessage(
+        'cc-sdd: verification is already running for this spec. Opened it instead.',
+      );
+      return;
+    }
+
     await selectSpec(record);
     await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL, runSkillOptions);
+  };
+
+  const runTask = async (record: SpecRecord, task: ParsedTask): Promise<void> => {
+    await runImplementation(record, [task.id]);
+  };
+
+  const runFromTask = async (record: SpecRecord, task: ParsedTask): Promise<void> => {
+    const content = await readArtifact(record, 'tasks');
+    const tasks = parseTasks(content ?? '');
+    const index = tasks.findIndex(
+      (candidate) => candidate.line === task.line && candidate.id === task.id,
+    );
+    const remaining = (index === -1 ? tasks : tasks.slice(index))
+      .filter((candidate) => !candidate.checked)
+      .map((candidate) => candidate.id);
+    if (remaining.length === 0) {
+      void vscode.window.showInformationMessage('cc-sdd: no remaining tasks from this point.');
+      return;
+    }
+    await runImplementation(record, remaining);
+  };
+
+  const openSpecRun = (record: SpecRecord): void => {
+    const active = activeRunFor(record, [IMPLEMENTATION_SKILL]) ?? activeRunFor(record);
+    if (active) {
+      runsConsole.openRun(active.id);
+    } else {
+      void vscode.window.showInformationMessage('cc-sdd: no active run for this spec.');
+    }
+  };
+
+  const openValidation = async (record: SpecRecord): Promise<void> => {
+    if (!record.validationExists) {
+      void vscode.window.showInformationMessage(
+        'cc-sdd: no implementation validation report yet. Run validation first.',
+      );
+      return;
+    }
+    await openFile(record.validationPath);
   };
 
   const runWithSkill = async (skill: string, feature = ''): Promise<void> => {
@@ -617,7 +740,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (typeof value !== 'object' || value === null) {
       return undefined;
     }
-    const candidate = value as Partial<SessionRecord>;
+    const wrapped = value as { session?: unknown };
+    const candidate = (wrapped.session ?? value) as Partial<SessionRecord>;
     return typeof candidate.id === 'string' && typeof candidate.filePath === 'string'
       ? (candidate as SessionRecord)
       : undefined;
@@ -753,48 +877,48 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await resumeInConsole(session.id, session.filePath, session.skill, session.feature);
   };
 
-  let overviewSessionCache: { at: number; sessions: SessionRecord[] } | undefined;
-
   const loadOverview = async () => {
     const root = workspaceRoot();
     if (!root) {
-      return emptyOverview(Date.now());
+      return emptyOverview(Date.now(), vscode.workspace.name ?? 'Workspace');
     }
     const records = await loadSpecs();
-    const taskContents = await Promise.all(
-      records.map((record) => readArtifact(record, 'tasks')),
-    );
-    const now = Date.now();
-    if (!overviewSessionCache || now - overviewSessionCache.at > 5000) {
-      overviewSessionCache = { at: now, sessions: listSessions(root) };
-    }
+    const [taskContents, validations, roadmap] = await Promise.all([
+      Promise.all(records.map((record) => readArtifact(record, 'tasks'))),
+      Promise.all(records.map((record) => readValidation(record))),
+      readRoadmap(root, kiroDir()),
+    ]);
     return buildOverview({
-      specs: records.map((record, index) => ({ record, tasks: taskContents[index] })),
+      projectName: vscode.workspace.name ?? path.basename(root),
+      specs: records.map((record, index) => ({
+        record,
+        tasks: taskContents[index],
+        validation: validations[index],
+      })),
       runs: runsConsole.getRuns(),
-      sessions: overviewSessionCache.sessions,
-      now,
+      roadmap,
+      now: Date.now(),
     });
   };
 
   overviewPanel = new OverviewPanel({
     load: loadOverview,
-    openRun: (runId: string) => runsConsole.openRun(runId),
-    previewSession: async (sessionId: string) => {
-      const root = workspaceRoot();
-      if (!root) {
-        return;
-      }
-      const session = listSessions(root).find((candidate) => candidate.id === sessionId);
-      if (session) {
-        await previewSession(session);
-      }
-    },
     openSpec: async (specId: string) => {
       const record = (await loadSpecs()).find((candidate) => candidate.id === specId);
       if (!record) {
         return;
       }
       await selectSpec(record);
+      const tasksContent = await readArtifact(record, 'tasks');
+      const tasks = parseTasks(tasksContent ?? '');
+      const step = nextStepState(record.spec, {
+        done: tasks.filter((task) => task.checked).length,
+        total: tasks.length,
+      });
+      if (step.kind === 'review') {
+        await openArtifact({ record, phase: step.phase });
+        return;
+      }
       if (record.exists.tasks) {
         await openFile(record.artifacts.tasks);
       } else if (record.exists.requirements) {
@@ -803,21 +927,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await openFile(record.specJsonPath);
       }
     },
-    openArtifact: async (specId: string, phase: string) => {
-      if (!isPhaseKey(phase)) {
-        return;
-      }
-      const record = (await loadSpecs()).find((candidate) => candidate.id === specId);
-      if (record) {
-        await openArtifact({ record, phase });
-      }
-    },
+    openRun: (runId: string) => runsConsole.openRun(runId),
     openRuns: () => runsConsole.show(),
-    runDiscovery: () => runDiscovery(),
   });
   context.subscriptions.push(
     runsConsole.onDidChange(() => {
-      overviewStatusBar.update(runsConsole.getRuns());
+      runsStatusBar.update(runsConsole.getRuns());
       overviewPanel?.scheduleRefresh();
     }),
   );
@@ -902,13 +1017,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     const label = record.spec?.feature_name?.trim() || record.id;
-    const action = record.spec ? nextAction(record.spec).label : 'spec.json missing';
+    const progress = await progressFor(record);
+    const action = progress.completed ? 'Completed' : progress.next.label;
     const lines = [
       `# ${label}`,
       '',
       `- Path: \`${record.dir}\``,
       `- Phase: \`${record.spec?.phase ?? 'unknown'}\``,
+      `- Stage: ${progress.stageLabel}`,
+      `- State: ${progress.stateLabel}`,
       `- Ready for implementation: ${record.spec?.ready_for_implementation ? 'yes' : 'no'}`,
+      `- Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks`,
+      `- Verification: ${progress.verification.status}`,
       `- Next: ${action}`,
       '',
       '| Phase | File | Status | Generated | Approved |',
@@ -938,7 +1058,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerTreeDataProvider('ccSdd.tasks', taskProvider),
     vscode.window.registerTreeDataProvider('ccSdd.sessions', sessionsProvider),
     statusBar,
-    overviewStatusBar,
+    runsStatusBar,
     register('ccSdd.refresh', refresh),
     register('ccSdd.pickSpec', pickSpec),
     register('ccSdd.showStatus', showStatus),
@@ -997,6 +1117,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showInformationMessage('cc-sdd: no specs found.');
       }
     }),
+    register('ccSdd.openValidation', async (arg) => {
+      const record = recordFromArg(arg);
+      if (record) {
+        await openValidation(record);
+      }
+    }),
+    register('ccSdd.openSpecRun', async (arg) => {
+      const record = recordFromArg(arg);
+      if (record) {
+        openSpecRun(record);
+      }
+    }),
+    register('ccSdd.runTask', async (arg) => {
+      const target = taskTarget(arg);
+      if (target) {
+        await runTask(target.record, target.task);
+      }
+    }),
+    register('ccSdd.runFromTask', async (arg) => {
+      const target = taskTarget(arg);
+      if (target) {
+        await runFromTask(target.record, target.task);
+      }
+    }),
+    register('ccSdd.openSessionRun', async (arg) => {
+      const session = sessionFromArg(arg);
+      if (!session) {
+        return;
+      }
+      const run = runsConsole
+        .getRuns()
+        .find((candidate) => candidate.sessionId === session.id);
+      if (run) {
+        runsConsole.openRun(run.id);
+      } else {
+        void vscode.window.showInformationMessage('cc-sdd: no related run is available.');
+      }
+    }),
+    register('ccSdd.toggleSessionScope', async () => {
+      sessionsProvider.toggleScope();
+    }),
     register('ccSdd.openTask', async (arg) => {
       const target = taskTarget(arg);
       if (target) {
@@ -1052,7 +1213,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      overviewSessionCache = undefined;
       setupWatcher();
       void refresh().catch(showError);
     }),

@@ -21,6 +21,10 @@ export interface SpecRecord {
   artifactUpdatedAtMs?: Record<PhaseKey, number | undefined>;
   spec: SpecJson | null;
   specError?: string;
+  /** Path/stat for the implementation validation report, when present. */
+  validationPath: string;
+  validationExists: boolean;
+  validationUpdatedAtMs?: number;
   /** spec.json filesystem timestamps, used when metadata has no dates. */
   createdAtMs?: number;
   updatedAtMs?: number;
@@ -119,6 +123,15 @@ const readRecord = async (specsRoot: string, id: string): Promise<SpecRecord> =>
     throw error;
   });
 
+  const validationPath = path.join(dir, 'impl-validation.md');
+  const validationStat = await fs.stat(validationPath).catch((error: unknown) => {
+    if (isNotFound(error)) {
+      return undefined;
+    }
+    throw error;
+  });
+  const validationExists = validationStat?.isFile() === true;
+
   return {
     id,
     dir,
@@ -128,6 +141,9 @@ const readRecord = async (specsRoot: string, id: string): Promise<SpecRecord> =>
     artifactUpdatedAtMs,
     spec,
     specError,
+    validationPath,
+    validationExists,
+    validationUpdatedAtMs: validationExists ? validationStat.mtimeMs : undefined,
     createdAtMs: specStat
       ? specStat.birthtimeMs || specStat.ctimeMs || specStat.mtimeMs
       : undefined,
@@ -189,6 +205,32 @@ export const specUpdatedAt = (record: SpecRecord): number | undefined => {
     record.createdAtMs,
   ].filter((value): value is number => typeof value === 'number' && value > 0);
   return candidates.length > 0 ? Math.max(...candidates) : undefined;
+};
+
+/** Latest mtime of spec.json and its phase artifacts. */
+export const specContentUpdatedAt = (record: SpecRecord): number => {
+  const artifactUpdatedAt = record.artifactUpdatedAtMs
+    ? Math.max(0, ...PHASES.map((phase) => record.artifactUpdatedAtMs?.[phase] ?? 0))
+    : 0;
+  const metadataUpdatedAt = parseTimestamp(record.spec?.updated_at) ?? 0;
+  return Math.max(record.updatedAtMs ?? 0, metadataUpdatedAt, artifactUpdatedAt);
+};
+
+export interface ValidationFile {
+  content?: string;
+  error?: string;
+}
+
+/** Reads impl-validation.md without treating a missing report as an error. */
+export const readValidation = async (record: SpecRecord): Promise<ValidationFile> => {
+  if (!record.validationExists) {
+    return {};
+  }
+  try {
+    return { content: await fs.readFile(record.validationPath, 'utf8') };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 };
 
 export const readArtifact = async (

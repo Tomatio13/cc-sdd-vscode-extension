@@ -158,6 +158,36 @@
         "icon": "$(shield)"
       },
       {
+        "command": "ccSdd.openValidation",
+        "title": "Open Validation Report",
+        "icon": "$(file)"
+      },
+      {
+        "command": "ccSdd.openSpecRun",
+        "title": "Open Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ccSdd.runTask",
+        "title": "Run This Task",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ccSdd.runFromTask",
+        "title": "Run From This Task",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "ccSdd.openSessionRun",
+        "title": "Open Related Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ccSdd.toggleSessionScope",
+        "title": "cc-sdd: Toggle Sessions Scope",
+        "icon": "$(list-unordered)"
+      },
+      {
         "command": "ccSdd.openTask",
         "title": "Open Task",
         "icon": "$(go-to-file)"
@@ -229,6 +259,11 @@
           "command": "ccSdd.refreshSessions",
           "when": "view == ccSdd.sessions",
           "group": "navigation@1"
+        },
+        {
+          "command": "ccSdd.toggleSessionScope",
+          "when": "view == ccSdd.sessions",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
@@ -253,11 +288,6 @@
           "group": "inline@1"
         },
         {
-          "command": "ccSdd.runImpl",
-          "when": "view == ccSdd.specs && viewItem == spec-ready",
-          "group": "inline@2"
-        },
-        {
           "command": "ccSdd.runSteering",
           "when": "view == ccSdd.specs && viewItem =~ /^steering/",
           "group": "inline@1"
@@ -273,14 +303,24 @@
           "group": "inline@2"
         },
         {
-          "command": "ccSdd.runValidateImpl",
-          "when": "view == ccSdd.specs && viewItem == impl-complete",
+          "command": "ccSdd.openSpecRun",
+          "when": "view == ccSdd.specs && viewItem == impl-running",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.openSpecRun",
+          "when": "view == ccSdd.specs && viewItem == verification-running",
           "group": "inline@2"
         },
         {
           "command": "ccSdd.runValidateImpl",
-          "when": "view == ccSdd.specs && viewItem == impl-complete",
-          "group": "navigation@1"
+          "when": "view == ccSdd.specs && viewItem =~ /^verification-(none|failed|stale|manual|unconfirmed|error)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.openValidation",
+          "when": "view == ccSdd.specs && viewItem =~ /^verification-(verified|failed|stale|manual|unconfirmed|error)$/",
+          "group": "inline@1"
         },
         {
           "command": "ccSdd.openArtifact",
@@ -304,11 +344,6 @@
         },
         {
           "command": "ccSdd.openTask",
-          "when": "view == ccSdd.specs && viewItem == task-todo",
-          "group": "navigation@1"
-        },
-        {
-          "command": "ccSdd.openTask",
           "when": "view == ccSdd.tasks && viewItem =~ /^task/",
           "group": "navigation@1"
         },
@@ -318,8 +353,28 @@
           "group": "inline@1"
         },
         {
+          "command": "ccSdd.runTask",
+          "when": "view == ccSdd.tasks && viewItem == task-todo",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccSdd.runFromTask",
+          "when": "view == ccSdd.tasks && viewItem == task-todo",
+          "group": "inline@3"
+        },
+        {
+          "command": "ccSdd.openSpecRun",
+          "when": "view == ccSdd.tasks && viewItem == task-running",
+          "group": "inline@2"
+        },
+        {
           "command": "ccSdd.resumeSession",
-          "when": "view == ccSdd.sessions && viewItem == session",
+          "when": "view == ccSdd.sessions && viewItem == session-history",
+          "group": "inline@1"
+        },
+        {
+          "command": "ccSdd.openSessionRun",
+          "when": "view == ccSdd.sessions && viewItem == session-active-run",
           "group": "inline@1"
         }
       ],
@@ -354,6 +409,26 @@
         },
         {
           "command": "ccSdd.toggleTask",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openValidation",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openSpecRun",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.runTask",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.runFromTask",
+          "when": "false"
+        },
+        {
+          "command": "ccSdd.openSessionRun",
           "when": "false"
         },
         {

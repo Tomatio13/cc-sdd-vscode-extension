@@ -16,7 +16,7 @@ VS Code 上で cc-sdd の Spec-Driven Development を回すためのワークベ
   - 拡張内蔵の **Runs コンソール**(Claude Agent SDK 経由の headless 実行)
   - Copilot Chat / カスタムコマンド / クリップボード
 - 過去の Claude Code セッションを一覧・プレビュー・再開できる(**Sessions**)
-- 複数の run / セッション / spec を 1 画面で俯瞰できる(**Overview** ボード)
+- 複数の Spec の進捗を 1 画面で俯瞰できる(**Overview** ポートフォリオ)
 
 「生成はエージェント、承認と状態遷移は拡張」が設計の中心です。
 
@@ -29,7 +29,8 @@ VS Code 上で cc-sdd の Spec-Driven Development を回すためのワークベ
 | 3 | [03-agents-and-runs.md](./03-agents-and-runs.md) | エージェント呼び出し、Claude Agent SDK ランナー、Runs コンソール(Webview) |
 | 4 | [04-sessions.md](./04-sessions.md) | Claude Code セッションの保存形式、一覧・絞り込み、プレビュー、再開 |
 | 5 | [05-development.md](./05-development.md) | ビルド/テスト/パッケージ/リリース、既知の落とし穴、拡張手順 |
-| 6 | [06-overview.md](./06-overview.md) | リーダー / PM 向け Overview ボード（KPI / Kanban / spec ポートフォリオ） |
+| 6 | [06-overview.md](./06-overview.md) | リーダー / PM 向け Overview ポートフォリオ（KPI / spec 進捗） |
+| 7 | [worker-sidebar-redesign.md](./worker-sidebar-redesign.md) | 個人作業用サイドバー再設計（Specs / Tasks / Sessions） |
 
 ## 全体像
 
@@ -38,7 +39,7 @@ flowchart LR
   subgraph VSCode["VS Code"]
     UI["Tree Views<br/>Specs / Tasks / Sessions"]
     CONSOLE["Runs Console<br/>(Webview)"]
-    OVERVIEW["Overview Board<br/>(Webview)"]
+    OVERVIEW["Overview Portfolio<br/>(Webview)"]
     EXT["extension.ts<br/>(composition root)"]
   end
 
@@ -83,4 +84,4 @@ flowchart LR
 | agent | スキルを実行する外部ツール(Claude Code 等) |
 | run | Runs コンソール上の 1 回の headless 実行 |
 | session | Claude Code が `~/.claude/projects/` に保存する会話ログ |
-| overview | ライブ run / 作業中セッション / 承認待ち / spec 進捗をまとめたリーダー向けボード |
+| overview | Spec の工程・タスク・実行状態・ブロック・依存・検証をまとめたリーダー向けポートフォリオ |

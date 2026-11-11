@@ -4,29 +4,29 @@
 English | <a href="./README_ja.md">日本語</a>
 </sub></div>
 
-A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** board for parallel workers.
+A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** portfolio for spec progress.
 
-![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview board on the right](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview portfolio on the right](./assets/workbench.png)
 
 The workbench is built around three sidebar trees and two panels:
 
-- **Specs, Tasks, Sessions** — the sidebar shows phase and approval state, the next action, task progress, steering context, and resumable Claude Code sessions.
+- **Specs, Tasks, Sessions** — the sidebar selects one spec, shows its Requirements → Design → Tasks → Implementation → Verification pipeline, and keeps task execution and session resume in the matching views.
 - **Runs** — streams tool calls, markdown output, and progress in one panel. Permission prompts and `AskUserQuestion` appear as buttons there.
-- **Overview** — a PM-facing board with waiting workers, live runs, today's spend, and spec progress.
+- **Overview** — a PM-facing portfolio of in-progress specs, stages, local run state, explicit blocks, dependency candidates, recent updates, and verified completions.
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 ## What it does
 
 - **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate; use the inline sync button to re-run it after the codebase changes) and roadmap.md order/dependencies when they exist.
-- **Spec Explorer** — lists every `.kiro/specs/<feature>` as a numbered Requirements → Design → Tasks → Implementation pipeline, with one explicit next action until implementation is complete. Newest specs come first by default; set `ccSdd.specSort` to `roadmap` to follow roadmap.md dependency order instead.
+- **Spec Explorer** — lists every `.kiro/specs/<feature>` as a numbered Requirements → Design → Tasks → Implementation → Verification pipeline, with one explicit next action. Implementation completion is separate from spec completion: a spec is complete only when a current `impl-validation.md` records `GO`. Newest specs come first by default; set `ccSdd.specSort` to `roadmap` to follow roadmap.md dependency order instead.
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
-- **Overview board** — a leader / PM view that combines live runs, recently active sessions, and spec progress. Kanban columns for `Needs you` / `Running` / `Done` / `Failed`, a today-spend and task KPI strip, and a newest-first spec portfolio with approvals, `tasks.md` progress, the same next step as the Specs tree, and last-updated times. Click a card to open the run, or a spec to open its `tasks.md`.
-- **Task board** — parses `tasks.md` checkboxes, `(P)` markers, `_Boundary:_`, `_Depends:_`, and `_Requirements:_`. Toggle a task from the tree without leaving the editor.
-- **Sessions** — lists the Claude Code sessions recorded for the current workspace (titles come from the original `/kiro-…` prompt) with token totals and estimated cost, and resumes them in the Runs console or an interactive terminal. Sessions from other projects are never shown.
+- **Overview portfolio** — a leader / PM view of repository spec progress. KPI filters for in-progress, blocked, review pending, verification pending, and done; an in-progress table that separates stage from run state; explicit block reasons and roadmap dependency candidates; recent updates; and a collapsed completed section. Verification is only claimed when `impl-validation.md` says `GO` for the current artifacts. Local runs stay in the Runs console and are labelled as this-window state.
+- **Task board** — the selected spec is always shown at the top. Implementation tasks are separated from a Verification section with recorded checks, status, and start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
+- **Sessions** — initially scoped to the selected spec, with a toggle for all specs. Active/waiting sessions are separated from history; each item shows spec, stage (including verification), state, and last activity. Resume is offered for history sessions and open-run for active sessions with a matching run.
 - **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
-- **Status bar** — shows the active spec and the next action, plus a `N waiting · M running` signal while runs are active.
+- **Status bar** — shows the active spec and the shared next action, plus a `N waiting · M running` signal while runs are active.
 - **Auto refresh** — watches the specs directory and reloads on changes.
 - **Installer** — runs `npx cc-sdd@latest` with the integration you pick.
 - **JSON Schema** — validates `.kiro/specs/*/spec.json` while you edit it.
@@ -49,6 +49,8 @@ The extension treats `spec.json` as the single source of truth and only writes a
 
 - Existing `phase` values (`initialized`, `requirements-generated`, `design-generated`, `tasks-generated`) are preserved.
 - `ready_for_implementation` becomes `true` when all three approvals are `true`.
+- Optional `blocked_reason` / `blockers` fields are shown as explicit blocks; the Overview never infers a block from age or past runs.
+- Overview verification reads `impl-validation.md` (`DECISION: GO | NO-GO | MANUAL_VERIFY_REQUIRED`). A result older than the current artifacts is shown as stale, not verified.
 - Writes use a temporary file and rename, so an interrupted save does not truncate `spec.json`.
 
 ## Commands
@@ -64,7 +66,7 @@ The extension treats `spec.json` as the single source of truth and only writes a
 | `cc-sdd: Install Skills` | Pick an agent integration and run `npx cc-sdd@latest`. |
 | `cc-sdd: Select Active Spec` | Choose which spec the Tasks view follows. |
 | `cc-sdd: Show Spec Status` | Open a Markdown summary of phases and approvals. |
-| `cc-sdd: Open Overview` | Open the leader / PM board (also the dashboard icon in the Specs, Tasks, and Sessions title bars). |
+| `cc-sdd: Open Overview` | Open the leader / PM spec portfolio (also the dashboard icon in the Specs, Tasks, and Sessions title bars). |
 | Approve / Revoke Phase | Context actions on a phase node. |
 | Run Phase | Context action on a missing/draft/generated phase. |
 | Run Implementation | Context action on a ready spec. |
@@ -107,17 +109,19 @@ The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so
 - **Resume in terminal** — runs `claude --resume <session-id>` interactively.
 - **Open raw transcript** / **Copy session id** — for inspection or scripting.
 
-### Overview board
+### Overview portfolio
 
-`cc-sdd: Open Overview` (or the dashboard icon in the view title) opens a PM-facing board:
+`cc-sdd: Open Overview` (or the dashboard icon in the view title) opens a team-facing portfolio:
 
-- **KPI strip** — things waiting on you (permission requests, questions, and approvals), running workers, failures today, task completion, and estimated spend today.
-- **Status bar signal** — while runs are active, a compact `N waiting · M running` indicator opens the board in one click.
-- **Kanban columns** — `Needs you` / `Running` / `Done` / `Failed`. A card is one headless run (this window), one recently active Claude Code session (other windows / terminals), or one phase waiting for approval. Click a card to open the run tab, preview the session, or open the artifact.
-- **Spec portfolio** — every spec with phase, approval pills, `tasks.md` progress, live worker count, today's cost, and the next action. Click a spec to open its `tasks.md`.
-- **Filters** — click a KPI to focus a column, or pick a spec from the dropdown to see only its workers.
+- **Scope** — the header names the project, the last fetch time, and the data scope: Specs come from this workspace; run state comes from records visible in this VS Code window.
+- **Project overview** — clickable counts for in-progress, blocked, review pending, verification pending, and done. Counts are not mutually exclusive; subtexts explain the overlap.
+- **In-progress specs** — a table of stage, task progress, current status, block reason, and last update. Stage and run state are separate: an implementation-stage spec with no run record shows `No run record`, not `Running`.
+- **Dependencies & candidates** — explicit `roadmap.md` relationships: waiting on another spec, downstream impact, ready-to-start candidates, and stale verification results. Without a roadmap the UI says `No dependency information` instead of claiming readiness.
+- **Recent updates** — recorded spec updates, local run events, and validation reports. Task/phase change history is not invented from timestamps.
+- **Completed specs** — collapsed by default. Completion means all tasks are done **and** the current artifacts have a `GO` validation result; a task-complete spec without a current result stays in verification pending.
+- **Filters, collapse, and scroll** — preserved across auto-refresh.
 
-Live run state is exact for the current window. Work in other windows is inferred from the transcript tail: a session whose last turn is still open appears as **Active elsewhere**, an unanswered `AskUserQuestion` goes to **Needs you**, and a completed transcript is not shown on the board (it stays in **Sessions**). Durable cross-window run history is the next step (run persistence).
+Local runs remain in the **Runs console**, and the status bar still shows local running workers and opens that console.
 
 ## Workspace scope
 
