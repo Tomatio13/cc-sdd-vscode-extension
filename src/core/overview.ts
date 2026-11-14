@@ -1,13 +1,10 @@
 // Pure aggregation for the team-facing spec overview. It reads repository
 // state plus the local run records that are actually visible in this window.
 // The UI labels that scope explicitly: a local run is not team-wide truth.
+import { buildOverviewReport, type OverviewReport } from './overviewReport';
 import type { RunState } from '../run/claudeRunner';
 import { PHASE_META } from './phases';
-import {
-  buildSpecProgress,
-  type SpecStage,
-  type Verification,
-} from './progress';
+import { buildSpecProgress, type SpecStage, type Verification } from './progress';
 import {
   specCreatedAt,
   specUpdatedAt,
@@ -15,11 +12,7 @@ import {
   type SpecRecord,
   type ValidationFile,
 } from './repository';
-import {
-  type PhaseKey,
-  type PhaseStatus,
-  type SpecJson,
-} from './spec';
+import { type PhaseKey, type PhaseStatus, type SpecJson } from './spec';
 
 export type OverviewRunState = 'none' | 'idle' | 'running' | 'input' | 'failed';
 
@@ -107,6 +100,7 @@ export interface OverviewEvent {
 }
 
 export interface OverviewModel {
+  report: OverviewReport;
   generatedAt: number;
   projectName: string;
   dependencyInfo: 'available' | 'none';
@@ -295,8 +289,7 @@ const finalizeStatus = (
     return;
   }
   if (spec.runState === 'input') {
-    spec.status =
-      spec.pendingCount > 1 ? `Input waiting (${spec.pendingCount})` : 'Input waiting';
+    spec.status = spec.pendingCount > 1 ? `Input waiting (${spec.pendingCount})` : 'Input waiting';
     if (spec.runningCount > 0) {
       spec.statusDetail = `${spec.runningCount} more running`;
     }
@@ -419,9 +412,7 @@ const buildDependencies = (
       kind: 'downstream',
       specId: spec.id,
       specLabel: spec.label,
-      text: `Downstream specs waiting: ${spec.downstream
-        .map(labelFor)
-        .join(', ')}`,
+      text: `Downstream specs waiting: ${spec.downstream.map(labelFor).join(', ')}`,
       related: spec.downstream.map((id) => ({ id, label: labelFor(id) })),
     });
   }
@@ -442,11 +433,7 @@ const buildDependencies = (
   return notes;
 };
 
-const buildEvents = (
-  specs: OverviewSpec[],
-  runs: RunState[],
-  now: number,
-): OverviewEvent[] => {
+const buildEvents = (specs: OverviewSpec[], runs: RunState[], now: number): OverviewEvent[] => {
   const byId = new Map(specs.map((spec) => [spec.id, spec]));
   const events: OverviewEvent[] = [];
 
@@ -536,9 +523,7 @@ const buildEvents = (
         specLabel: spec.label,
         runId: run.id,
         text:
-          run.pending.kind === 'question'
-            ? 'Input waiting: question'
-            : 'Input waiting: permission',
+          run.pending.kind === 'question' ? 'Input waiting: question' : 'Input waiting: permission',
       });
     }
   }
@@ -559,7 +544,11 @@ const rank = (spec: OverviewSpec): number => {
   if (spec.runState === 'running') {
     return 1;
   }
-  if (spec.runState === 'input' || spec.reviewPhases.length > 0 || spec.dependencyUnknown.length > 0) {
+  if (
+    spec.runState === 'input' ||
+    spec.reviewPhases.length > 0 ||
+    spec.dependencyUnknown.length > 0
+  ) {
     return 2;
   }
   return 3;
@@ -631,6 +620,7 @@ export const buildOverview = (input: OverviewInput): OverviewModel => {
   const sortedSpecs = [...inProgress, ...completed];
 
   return {
+    report: buildOverviewReport(projectName, sortedSpecs, now),
     generatedAt: now,
     projectName,
     dependencyInfo,
@@ -662,6 +652,7 @@ export const buildOverview = (input: OverviewInput): OverviewModel => {
 
 /** Empty model used before a workspace is available. */
 export const emptyOverview = (now: number, projectName = 'Workspace'): OverviewModel => ({
+  report: buildOverviewReport(projectName, [], now),
   generatedAt: now,
   projectName,
   dependencyInfo: 'none',

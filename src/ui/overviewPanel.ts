@@ -1,6 +1,4 @@
-// "cc-sdd Overview": a team-facing portfolio over repository spec state and
-// the local run records visible in this window. The header states that scope
-// explicitly so local activity is not mistaken for team-wide truth.
+// Repository progress snapshot for reporting; local execution stays in Runs.
 import * as vscode from 'vscode';
 import type { OverviewModel } from '../core/overview';
 import { webviewThemeCss } from './webviewTheme';
@@ -8,14 +6,12 @@ import { webviewThemeCss } from './webviewTheme';
 export interface OverviewPanelOptions {
   load: () => Promise<OverviewModel>;
   openSpec: (specId: string) => Promise<void>;
-  openRun: (runId: string) => void;
-  openRuns: () => void;
+  openVerification: (specId: string) => Promise<void>;
 }
 
 interface OverviewMessage {
   type: string;
   specId?: string;
-  runId?: string;
 }
 
 const getNonce = (): string => {
@@ -141,18 +137,19 @@ export class OverviewPanel {
       case 'refresh':
         await this.loadAndPost();
         return;
+      case 'copyReport': {
+        const model = await this.options.load();
+        await vscode.env.clipboard.writeText(model.report.text);
+        void vscode.window.showInformationMessage('Progress summary copied.');
+        return;
+      }
       case 'openSpec':
         if (typeof typed.specId === 'string') {
           await this.options.openSpec(typed.specId);
         }
         return;
-      case 'openRun':
-        if (typeof typed.runId === 'string') {
-          this.options.openRun(typed.runId);
-        }
-        return;
-      case 'openRuns':
-        this.options.openRuns();
+      case 'openVerification':
+        if (typeof typed.specId === 'string') await this.options.openVerification(typed.specId);
         return;
       default:
         return;
@@ -189,7 +186,7 @@ ${webviewThemeCss}
     .app-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
     .kpis {
-      display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
       background: var(--cc-surface); border: 1px solid var(--cc-border);
       border-radius: var(--cc-radius-lg); overflow: hidden;
     }
@@ -320,10 +317,10 @@ ${webviewThemeCss}
     }
 
     @media (max-width: 900px) {
-      .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-      .kpi { grid-column: span 2; }
+      .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .kpi { grid-column: auto; }
       .kpi:nth-child(3n + 1) { border-left: 0; }
-      .kpi:nth-child(n + 4) { grid-column: span 3; border-top: 1px solid var(--cc-border); }
+      .kpi:nth-child(n + 4) { grid-column: auto; border-top: 1px solid var(--cc-border); }
       .app-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
     }
     @media (max-width: 760px) {
@@ -347,9 +344,17 @@ ${webviewThemeCss}
       .kpi { grid-column: auto; border-top: 0; border-left: 1px solid var(--cc-border); }
       .kpi:nth-child(odd) { border-left: 0; }
       .kpi:nth-child(n + 3) { border-top: 1px solid var(--cc-border); }
-      .kpi:last-child { grid-column: 1 / -1; border-left: 0; }
+
     }
 
+    :root { --cc-accent: var(--cc-fg); --cc-accent-strong: var(--cc-fg); }
+    .report-summary { padding: 16px 0; border-bottom: 1px solid var(--cc-border); }
+    .report-summary p { margin: 0 0 8px; }
+    .report-issues { list-style: none; padding: 0; margin: 0; }
+    .report-issues li { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--cc-border); }
+    .report-issues li span { color: var(--cc-muted); overflow-wrap: anywhere; min-width: 0; }
+    .kpi.alert .n, .status-primary, .link { color: var(--cc-fg); }
+    .bar span { background: var(--cc-fg); }
   </style>
 </head>
 <body>
@@ -376,7 +381,7 @@ ${webviewThemeCss}
     const STAGE_LABELS = {
       requirements: 'Requirements',
       design: 'Design',
-      tasks: 'Tasks',
+      tasks: 'Task planning',
       implementation: 'Implementation',
       verification: 'Verification',
       done: 'Done',
@@ -385,7 +390,7 @@ ${webviewThemeCss}
     const FILTER_LABELS = {
       all: 'all',
       'in-progress': 'in progress',
-      blocked: 'blocked',
+      attention: 'needs attention',
       review: 'review pending',
       verification: 'verification pending',
       done: 'completed',
@@ -395,7 +400,6 @@ ${webviewThemeCss}
     let model = null;
     let activeFilter = 'all';
     let completedOpen = false;
-    let eventsExpanded = false;
     let selectedSpecId = null;
     let lastError = '';
 
@@ -404,32 +408,11 @@ ${webviewThemeCss}
     }
 
     function matchesFilter(spec) {
-      if (activeFilter === 'blocked') return Boolean(spec.blockedReason);
+      if (activeFilter === 'attention') return model.report.concerns.some(function (item) { return item.specId === spec.id; });
       if (activeFilter === 'review') return spec.reviewPhases.length > 0;
       if (activeFilter === 'verification') return spec.implementationComplete && !spec.completed;
       if (activeFilter === 'done') return false;
       return true;
-    }
-
-    function statusClass(spec) {
-      if (spec.error) return 'status-failed';
-      if (spec.blockedReason) return 'status-blocked';
-      if (spec.runState === 'input' || spec.dependencyUnknown.length > 0) return 'status-input';
-      if (spec.runState === 'running') return 'status-running';
-      if (spec.runState === 'failed' || (spec.implementationComplete && spec.verification.status === 'failed')) {
-        return 'status-failed';
-      }
-      if (
-        spec.implementationComplete &&
-        (spec.verification.status === 'stale' ||
-          spec.verification.status === 'manual' ||
-          spec.verification.status === 'unconfirmed' ||
-          spec.verification.status === 'error' ||
-          spec.stage === 'verification')
-      ) {
-        return 'status-verification';
-      }
-      return '';
     }
 
     function verificationLabel(spec) {
@@ -457,42 +440,14 @@ ${webviewThemeCss}
     }
 
     function renderKpis() {
-      const kpi = model.kpi;
+      const report = model.report;
       const items = [
-        {
-          key: 'in-progress',
-          n: kpi.inProgress,
-          k: 'In progress',
-          s: kpi.blocked + ' blocked · ' + kpi.verificationPending + ' verification',
-        },
-        {
-          key: 'blocked',
-          n: kpi.blocked,
-          k: 'Blocked',
-          s: kpi.blockedExplicit + ' explicit · ' + kpi.blockedDependency + ' dependency',
-          alert: kpi.blocked > 0,
-        },
-        {
-          key: 'review',
-          n: kpi.reviewPending,
-          k: 'Review pending',
-          s: kpi.reviews + ' approval' + (kpi.reviews === 1 ? '' : 's') + ' waiting',
-        },
-        {
-          key: 'verification',
-          n: kpi.verificationPending,
-          k: 'Verification pending',
-          s: kpi.verificationFailed
-            ? kpi.verificationFailed + ' failed'
-            : 'awaiting result',
-          alert: kpi.verificationFailed > 0,
-        },
-        {
-          key: 'done',
-          n: kpi.done,
-          k: 'Done',
-          s: 'verified',
-        },
+        { key: 'all', n: report.total, k: 'Total specs', s: 'repository snapshot' },
+        { key: 'in-progress', n: report.inProgress, k: 'In progress', s: 'not yet verified complete' },
+        { key: 'review', n: report.reviewPending, k: 'Review pending', s: 'within the working specs' },
+        { key: 'verification', n: report.verificationPending, k: 'Verification pending', s: 'implementation complete' },
+        { key: 'attention', n: report.concerns.length, k: 'Needs attention', s: 'recorded issues only' },
+        { key: 'done', n: report.done, k: 'Verified complete', s: 'current validation GO' },
       ];
       return '<div class="kpis" role="group" aria-label="Project overview">' + items.map(function (item) {
         const active = activeFilter === item.key ? ' active' : '';
@@ -514,26 +469,18 @@ ${webviewThemeCss}
       const updated = spec.updatedAt
         ? '<span title="Last updated: ' + esc(fmtAbsolute(spec.updatedAt)) + '">' + esc(timeAgo(spec.updatedAt)) + '</span>'
         : '<span class="muted">No timestamp</span>';
-      const detail = spec.statusDetail
-        ? '<span class="status-detail">' + esc(spec.statusDetail) + '</span>'
-        : '';
       const statusTitle = spec.implementationComplete ? verificationTitle(spec) : '';
-      const runButton = spec.runs.length > 1
-        ? '<button class="run-button" data-act="open-runs" title="Open the Runs console">Runs</button>'
-        : spec.latestRunId
-          ? '<button class="run-button" data-run-id="' + esc(spec.latestRunId) + '" title="Open local run">Run</button>'
-          : '';
       let html = '<tr data-spec-id="' + esc(spec.id) + '" tabindex="0" title="Open ' + esc(spec.label) + '"' +
         (selectedSpecId === spec.id ? ' class="selected"' : '') + '>';
       html += '<td class="spec-cell"><span class="spec-name">' + esc(spec.label) + '</span>' +
         (spec.label === spec.id ? '' : '<span class="spec-id">' + esc(spec.id) + '</span>') + '</td>';
       html += '<td data-label="Stage"><span class="stage">' + esc(STAGE_LABELS[spec.stage] || spec.stage) + '</span></td>';
-      html += '<td data-label="Tasks">' + tasks + '</td>';
-      html += '<td data-label="Current status"' +
-        (statusTitle ? ' title="' + esc(statusTitle) + '"' : '') + '><span class="status-primary ' + statusClass(spec) + '">' +
-        esc(spec.status) + '</span>' + detail + '</td>';
+      html += '<td data-label="Implementation tasks">' + tasks + '</td>';
+      html += '<td data-label="Recorded status"' +
+        (statusTitle ? ' title="' + esc(statusTitle) + '"' : '') + '><span class="status-primary">' +
+        esc(model.report.statuses[spec.id]) + '</span></td>';
       html += '<td data-label="Updated"><span class="updated">' + updated + '</span></td>';
-      html += '<td data-label="Action">' + runButton + '</td>';
+      html += '<td data-label="Verification" title="' + esc(verificationTitle(spec)) + '">' + esc(verificationLabel(spec)) + '</td>';
       html += '</tr>';
       return html;
     }
@@ -542,8 +489,7 @@ ${webviewThemeCss}
       const specs = model.specs.filter(function (spec) {
         return !spec.completed && matchesFilter(spec);
       });
-      const hint = model.kpi.inProgress + ' in progress · ' +
-        model.kpi.tasksDone + '/' + model.kpi.tasksTotal + ' tasks done (reference)';
+      const hint = 'Recorded stage, implementation tasks and verification · click a spec to inspect';
       let html = '<section class="section"><div class="section-head">' +
         '<h2 class="section-title">In-progress specs</h2>' +
         '<span class="section-hint">' + esc(hint) + '</span></div>';
@@ -556,65 +502,25 @@ ${webviewThemeCss}
         return html;
       }
       html += '<table class="spec-table"><thead><tr>' +
-        '<th>Spec</th><th>Stage</th><th>Tasks</th><th>Current status</th><th>Updated</th><th>Action</th>' +
+        '<th>Spec</th><th>Stage</th><th>Implementation tasks</th><th>Recorded status</th><th>Updated</th><th>Verification</th>' +
         '</tr></thead><tbody>' + specs.map(renderSpecRow).join('') + '</tbody></table></section>';
       return html;
     }
 
-    function renderDependencies() {
-      let html = '<section class="section"><div class="section-head">' +
-        '<h2 class="section-title">Dependencies & candidates</h2>' +
-        '<span class="section-hint">explicit records only</span></div>';
-      if (model.dependencyInfo === 'none') {
-        html += '<div class="notice">No dependency information (roadmap.md not found or empty).</div></section>';
-        return html;
-      }
-      if (!model.dependencies.length) {
-        html += '<div class="notice">No dependency candidates recorded.</div></section>';
-        return html;
-      }
-      html += '<ul class="dep-list">' + model.dependencies.map(function (item) {
-        return '<li class="dep dep-' + esc(item.kind) + '">' +
-          '<span class="dep-tag">' + esc(item.kind) + '</span>' +
-          '<button class="link" data-spec-id="' + esc(item.specId) + '">' + esc(item.specLabel) + '</button>' +
-          '<span class="dep-text">' + esc(item.text) + '</span></li>';
+    function renderAttention() {
+      const concerns = model.report.concerns;
+      let html = '<section class="section"><div class="section-head"><h2 class="section-title">Needs attention</h2><span class="section-hint">Recorded issues · for progress reporting</span></div>';
+      if (!concerns.length) return html + '<div class="notice">No recorded issues. This does not imply all work is complete.</div></section>';
+      return html + '<ul class="report-issues">' + concerns.map(function (item) {
+        const spec = model.specs.find(function (spec) { return spec.id === item.specId; });
+        const attr = spec && !spec.verification.reportMissing && spec.verification.status !== 'none' ? 'data-verify-id' : 'data-spec-id';
+        return '<li><button class="link" ' + attr + '="' + esc(item.specId) + '">' + esc(item.label) + '</button><span>' + esc(item.reasons.join(' · ')) + '</span></li>';
       }).join('') + '</ul></section>';
-      return html;
     }
 
-    function renderEvents() {
-      const events = model.events;
-      let html = '<section class="section"><div class="section-head">' +
-        '<h2 class="section-title">Recent updates</h2>' +
-        '<span class="section-hint">recorded updates and local run events</span></div>';
-      if (!events.length) {
-        html += '<div class="notice">No recorded events.</div></section>';
-        return html;
-      }
-      const visible = eventsExpanded ? events : events.slice(0, 10);
-      html += '<ul class="event-list">' + visible.map(function (event) {
-        const runButton = event.runId
-          ? '<button class="run-button event-run" data-run-id="' + esc(event.runId) + '" title="Open local run">Run</button>'
-          : '';
-        const scope = event.scope === 'local'
-          ? '<span class="scope-tag">local</span>'
-          : '';
-        const attrs = event.specId
-          ? ' data-spec-id="' + esc(event.specId) + '" tabindex="0" role="button"'
-          : '';
-        return '<li class="event"' + attrs + '>' +
-          '<span class="event-spec">' + esc(event.specLabel || '') + '</span>' +
-          scope +
-          '<span class="event-text">' + esc(event.text) + '</span>' +
-          runButton +
-          '<span class="event-time">' + esc(timeAgo(event.at)) + '</span></li>';
-      }).join('') + '</ul>';
-      if (events.length > 10) {
-        html += '<button class="text-button" data-act="toggle-events">' +
-          (eventsExpanded ? 'Show less' : 'Show all ' + events.length) + '</button>';
-      }
-      html += '</section>';
-      return html;
+    function renderReportSummary() {
+      const report = model.report;
+      return '<section class="report-summary"><p><strong>' + report.done + ' of ' + report.total + ' specs verified complete</strong> · ' + report.inProgress + ' in progress</p><p class="muted">Review, verification and attention counts are subsets and may overlap. Task counts describe implementation, not overall project completion.</p><button class="secondary" data-act="copy-report">Copy progress summary</button></section>';
     }
 
     function renderCompleted() {
@@ -644,7 +550,7 @@ ${webviewThemeCss}
             (spec.label === spec.id ? '' : '<span class="spec-id">' + esc(spec.id) + '</span>') + '</td>' +
             '<td data-label="Verification" title="' + esc(verificationTitle(spec)) + '">' + esc(verificationLabel(spec)) + '</td>' +
             '<td data-label="Completed"><span class="updated">' + updated + '</span></td>' +
-            '<td data-label="Action"><span class="muted">Verified</span></td>' +
+            '<td data-label="Action"><button class="text-button" data-verify-id="' + esc(spec.id) + '">View report</button></td>' +
             '</tr>';
         }).join('') + '</tbody></table></section>';
       return html;
@@ -668,7 +574,7 @@ ${webviewThemeCss}
         '<span class="generated" data-generated="' + model.generatedAt + '">Updated ' +
         esc(timeAgo(model.generatedAt)) + '</span></div>' +
         '<p class="brand-hint"><strong>' + esc(model.projectName) + '</strong>' +
-        ' · Specs: this workspace · Run state: records visible in this VS Code window' +
+        ' · Repository progress snapshot · approvals and execution stay with each spec' +
         esc(filterHint) + '</p>' +
         '</div><div class="app-actions">';
       html += '<button class="icon-button" data-act="refresh" title="Refresh" aria-label="Refresh">' +
@@ -687,9 +593,9 @@ ${webviewThemeCss}
           '<p class="empty-body">Create a spec from the Specs view or run /kiro-discovery.</p></div>';
       } else {
         html += renderKpis();
+        html += renderReportSummary();
+        html += renderAttention();
         html += renderInProgress();
-        html += renderDependencies();
-        html += renderEvents();
         html += renderCompleted();
       }
 
@@ -720,10 +626,9 @@ ${webviewThemeCss}
     }
 
     document.getElementById('app').addEventListener('click', function (event) {
-      const run = event.target.closest('[data-run-id]');
-      if (run) {
-        event.stopPropagation();
-        post('openRun', { runId: run.getAttribute('data-run-id') });
+      const verification = event.target.closest('[data-verify-id]');
+      if (verification) {
+        post('openVerification', { specId: verification.getAttribute('data-verify-id') });
         return;
       }
 
@@ -747,11 +652,8 @@ ${webviewThemeCss}
         } else if (act === 'toggle-completed') {
           completedOpen = !completedOpen;
           render();
-        } else if (act === 'toggle-events') {
-          eventsExpanded = !eventsExpanded;
-          render();
-        } else if (act === 'open-runs') {
-          post('openRuns');
+        } else if (act === 'copy-report') {
+          post('copyReport');
         }
         return;
       }

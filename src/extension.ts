@@ -908,7 +908,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         tasks: taskContents[index],
         validation: validations[index],
       })),
-      runs: runsConsole.getRuns(),
+      runs: [],
       roadmap,
       now: Date.now(),
     });
@@ -940,8 +940,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await openFile(record.specJsonPath);
       }
     },
-    openRun: (runId: string) => runsConsole.openRun(runId),
-    openRuns: () => runsConsole.show(),
+    openVerification: async (specId: string) => {
+      const record = (await loadSpecs()).find((candidate) => candidate.id === specId);
+      if (record) await openValidation(record);
+    },
   });
   context.subscriptions.push(
     runsConsole.onDidChange(() => {

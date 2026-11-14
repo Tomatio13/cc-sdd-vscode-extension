@@ -12,7 +12,7 @@ The workbench is built around a Specs sidebar with embedded implementation tasks
 
 - **Specs, Tasks, Sessions** — the sidebar selects one spec, shows its Requirements → Design → Tasks → Implementation → Verification pipeline, and keeps task execution and session resume in the matching views.
 - **Runs** — streams tool calls, markdown output, and progress in one panel. Permission prompts and `AskUserQuestion` appear as buttons there.
-- **Overview** — a PM-facing portfolio of in-progress specs, stages, local run state, explicit blocks, dependency candidates, recent updates, and verified completions.
+- **Overview** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
@@ -24,7 +24,7 @@ Specs uses a theme-aware sidebar timeline with connected stage markers, implemen
 - **Spec Explorer** — lists every `.kiro/specs/<feature>` as a numbered Requirements → Design → Tasks → Implementation → Verification pipeline, with one explicit next action. Implementation completion is separate from spec completion: a spec is complete only when a current `impl-validation.md` records `GO`. Newest specs come first by default; set `ccSdd.specSort` to `roadmap` to follow roadmap.md dependency order instead.
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
-- **Overview portfolio** — a leader / PM view of repository spec progress. KPI filters for in-progress, blocked, review pending, verification pending, and done; an in-progress table that separates stage from run state; explicit block reasons and roadmap dependency candidates; recent updates; and a collapsed completed section. Verification is only claimed when `impl-validation.md` says `GO` for the current artifacts. Local runs stay in the Runs console and are labelled as this-window state.
+- **Overview portfolio** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
 - **Task board** — each spec’s Implementation stage contains its own tasks. Verification remains a separate stage, with start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
 - **Sessions** — initially scoped to the selected spec, with a toggle for all specs. Active/waiting sessions are separated from history; each item shows spec, stage (including verification), state, and last activity. Resume is offered for history sessions and open-run for active sessions with a matching run.
 - **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
@@ -115,17 +115,12 @@ The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so
 
 ### Overview portfolio
 
-`cc-sdd: Open Overview` (or the dashboard icon in the view title) opens a team-facing portfolio:
+A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
 
-- **Scope** — the header names the project, the last fetch time, and the data scope: Specs come from this workspace; run state comes from records visible in this VS Code window.
-- **Project overview** — clickable counts for in-progress, blocked, review pending, verification pending, and done. Counts are not mutually exclusive; subtexts explain the overlap.
-- **In-progress specs** — a table of stage, task progress, current status, block reason, and last update. Stage and run state are separate: an implementation-stage spec with no run record shows `No run record`, not `Running`.
-- **Dependencies & candidates** — explicit `roadmap.md` relationships: waiting on another spec, downstream impact, ready-to-start candidates, and stale verification results. Without a roadmap the UI says `No dependency information` instead of claiming readiness.
-- **Recent updates** — recorded spec updates, local run events, and validation reports. Task/phase change history is not invented from timestamps.
-- **Completed specs** — collapsed by default. Completion means all tasks are done **and** the current artifacts have a `GO` validation result; a task-complete spec without a current result stays in verification pending.
-- **Filters, collapse, and scroll** — preserved across auto-refresh.
-
-Local runs remain in the **Runs console**, and the status bar still shows local running workers and opens that console.
+- Counts overlap: review, verification and attention are subsets, not additional work.
+- Concerns include explicit blocks, failed/manual/stale/unconfirmed/unavailable verification and metadata errors.
+- Click a spec to inspect artifacts; verified completions link to their reports. No approval or execution controls are offered here.
+- Local runs, inferred dependency candidates, elapsed-age guesses and task-based overall completion percentages are excluded from reporting. Recent updates and Dependencies & candidates are no longer displayed.
 
 ## Workspace scope
 
