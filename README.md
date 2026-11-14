@@ -11,14 +11,14 @@ A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It re
 The workbench is built around a Specs sidebar with embedded implementation tasks and a Sessions history timeline and two panels:
 
 - **Specs, Tasks, Sessions** — the sidebar selects one spec, shows its Requirements → Design → Tasks → Implementation → Verification pipeline, and keeps task execution and session resume in the matching views.
-- **Runs** — streams tool calls, markdown output, and progress in one panel. Permission prompts and `AskUserQuestion` appear as buttons there.
+- **Runs** — shows Markdown responses and progress in an assistant-ui conversation. Answer permission requests and single-choice, multiple-choice, or free-text questions inline; tool logs are hidden.
 - **Overview** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 Specs uses a theme-aware sidebar timeline with connected stage markers, implementation task progress, approval/run actions, and the five most recent runs in this window. Implementation tasks are embedded under each spec’s Implementation stage, with completed tasks folded away. The standalone Tasks view has been removed; Sessions uses the same monochrome timeline style: active sessions first, then history ordered by last activity, with details and resume actions on expansion. Expansion and reading position are preserved on refresh.
 
-Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use Cancel to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab.
+Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use the square stop icon to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab. The rounded composer supports follow-up messages and an upward-opening permission menu. Send, resume, stop, and phase actions use icons with tooltips; there is no model selector.
 
 ## What it does
 
@@ -29,7 +29,7 @@ Runs uses one editor tab per run, titled with its spec and stage. Reopening a ru
 - **Overview portfolio** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
 - **Task board** — each spec’s Implementation stage contains its own tasks. Verification remains a separate stage, with start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
 - **Sessions** — initially scoped to the selected spec, with a toggle for all specs. Active/waiting sessions are separated from history; each item shows spec, stage (including verification), state, and last activity. Resume is offered for history sessions and open-run for active sessions with a matching run.
-- **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
+- **Run insights** — model name, input/output tokens, cache-read tokens, and cost above the composer. Export the latest run trace to `.kiro/runs/*.json` with `cc-sdd: Save Last Run Trace` for debugging.
 - **Status bar** — shows the active spec and the shared next action, plus a `N waiting · M running` signal while runs are active.
 - **Auto refresh** — watches the specs directory and reloads on changes.
 - **Installer** — runs `npx cc-sdd@latest` with the integration you pick.
@@ -98,7 +98,7 @@ Internal commands (`ccSdd.openArtifact`, `ccSdd.openTask`, and so on) are hidden
 | --- | --- |
 | `claude` | Opens a terminal and runs `claude "/kiro-… <feature>"`. |
 | `claude-vscode` | Prefills the prompt in the Claude Code for VS Code panel. It follows the extension's preferred location (sidebar or editor tab). Press Enter to run it. |
-| `claude-console` | Runs headless via the Claude Agent SDK and streams progress in the **cc-sdd Runs** console. Permission requests and `AskUserQuestion` prompts appear as buttons inside the console, so requirements/design questions can be answered without leaving VS Code. |
+| `claude-console` | Runs headless via the Claude Agent SDK and streams progress in the **cc-sdd Runs** console. Permission requests and `AskUserQuestion` forms appear inline, so requirements/design questions can be answered without leaving VS Code. |
 | `codex` | Opens a terminal and runs `codex "$kiro-… <feature>"`. |
 | `copilot` | Prefills the prompt in Copilot Chat (`workbench.action.chat.open`). |
 | `opencode` | Opens a terminal and runs `opencode run "/kiro-… <feature>"`. |
@@ -109,9 +109,9 @@ If Copilot Chat cannot be opened, the prompt is copied to the clipboard instead.
 
 ### Sessions
 
-The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so only sessions whose recorded `cwd` matches the current workspace are listed (newest first). Hovering shows the last assistant message to jog your memory; clicking a session opens a **read-only preview** of the full transcript in the Runs console. The same card has a continuation input and a permission-mode selector: **Resume in console** continues the session **in place** (no extra dialogs), and **Terminal** launches `claude --resume`. The context-menu action also offers:
+The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so only sessions whose recorded `cwd` matches the current workspace are listed (newest first). Hovering shows the last assistant message to jog your memory; clicking a session opens a **read-only preview** of the conversation in the Runs console. Choose a permission mode from the menu at the lower left of the composer, enter a follow-up, and use the play icon to resume **in place** (no extra dialogs). The terminal icon launches `claude --resume`. The context-menu action also offers:
 
-- **Resume in Runs console** — continues the same session headlessly (Claude Agent SDK `resume`), with the usual permission picker. The stored transcript is replayed as a **Session history** block above the live output.
+- **Resume in Runs console** — continues the same session headlessly (Claude Agent SDK `resume`), with the usual permission picker. The stored conversation is displayed before the new responses; tool logs are omitted.
 - **Resume in terminal** — runs `claude --resume <session-id>` interactively.
 - **Open raw transcript** / **Copy session id** — for inspection or scripting.
 

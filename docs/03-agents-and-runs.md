@@ -27,6 +27,12 @@
 
 ## Runs コンソール(`claude-console`)
 
+### 対話画面
+
+Runs は assistant-ui の React コンポーネントで会話を表示します。`webview/runs.tsx` の ExternalStoreRuntime が、拡張からの状態・履歴を受け取り、追加指示・停止・質問回答・権限確認を既存の `postMessage` 経路へ返します。HTTP サーバーや Assistant Cloud は不要です。
+
+ツール実行ログは画面に表示しません。実行と権限確認は従来どおり Claude Agent SDK が担当し、トレースにも情報を残します。質問は複数選択・自由入力に対応します。実行終了後は同じセッションへ追加指示を送れます。
+
 ### 全体フロー
 
 ```mermaid
@@ -117,7 +123,7 @@ sequenceDiagram
   - `exitCode === 0 && !summary.isError` → `done`
   - それ以外 → `error`
 - **`result` が来ずにストリームが閉じた場合は ERROR**(「done なのに summary が無い」を防ぐ)
-- `stop_reason` は状態判定には使わず、`end_turn` 以外のときサマリに `stop: max_tokens` のような警告チップを表示する
+- `stop_reason` は状態判定には使わず、RunSummary とトレースに保存する
 - この `RunState.status` は Runs コンソールと `RunsStatusBar` が使う。別ウィンドウのセッションは Runs の状態を持たないため、[04-sessions.md](./04-sessions.md) のトランスクリプト末尾による `activity` 推定を Sessions ビューで使う
 
 ### Webview プロトコル(`ui/runsConsole.ts`)
@@ -134,20 +140,20 @@ sequenceDiagram
 | type | 内容 |
 | --- | --- |
 | `ready` | 初期化完了。スナップショット+履歴を要求 |
-| `cancel` / `rerun` / `close` / `popout` | 実行制御。`popout` は run 専用タブを開く |
-| `copy` / `openArtifact` | クリップボード / ファイルを開く |
+| `cancel` / `continue` | 停止 / 完了したセッションへの追加指示 |
 | `permission` | `{ pendingId, decision: allow \| always \| deny }` |
 | `answer` | `{ pendingId, labels: string[] }`(質問への回答) |
 | `approve` / `runPhase` / `runImpl` | 実行後のフェーズ操作 |
 | `resumeConsole` / `resumeTerminal` | プレビューカードからのセッション再開 |
-| `overview` | Overview ポートフォリオを開く(ヘッダーの **Overview** ボタン) |
+
 
 その他:
 
 - 1 Run = 1 タブ。`panels: Map<WebviewPanel, runId>` で管理し、同じ Run やセッションは既存タブを再利用。タブ名は Spec 名と工程名
 - 更新は 80ms で合流(`updateAll` のタイマー)
 - Webview の CSP は nonce 付き。`style-src` のみ `'unsafe-inline'` を許可
-- 履歴は「プレビュー/再開時のみ」。展開時に遅延レンダリングし、HTML 文字列をキャッシュ
+- 保存済み履歴はプレビュー/再開時に会話へ変換して表示。React が状態更新を反映する
+- `rerun` / `close` / `copy` / `openArtifact` / `overview` / `trace` のホストハンドラーは残るが、現在の画面からは送信しない
 
 ### RunsStatusBar / Overview との連携
 
@@ -158,7 +164,7 @@ sequenceDiagram
 | `getRuns(): RunState[]` | スナップショット。サイドバーと RunsStatusBar のために `history` を落とす |
 | `onDidChange` | `updateAll()` のたびに発火。RunsStatusBar とサイドバーの実行状態更新、および Overview の再取得に使う |
 | `openRun(runId)` | run 専用タブを開く |
-| `openOverview` オプション | Runs コンソールのヘッダー **Overview** ボタン |
+| `openOverview` オプション | 既存ホストハンドラー用。現在の Runs 画面にはボタンなし |
 
 - run は**このウィンドウのメモリ**にのみ保持。通常は履歴30件を上限に整理するが、実行中・入力待ち・開いているタブは削除しない。再起動でメモリ内の記録は消える
 - Overview は `spec.json` / `tasks.md` / `impl-validation.md` の記録を集計し、ローカル Run 状態は報告へ含めない(詳細は [06-overview.md](./06-overview.md))
@@ -166,27 +172,28 @@ sequenceDiagram
 
 ### コンソールの描画
 
-- ツール呼び出しはツール名のモノスペースチップ + 折りたたみ結果。行間はヘアラインで区切る
-- アシスタント出力はミニ Markdown(見出し・箇条書き・表・コードブロック・インラインコード・太字)
-- 実行中は 2px の進捗線 + ライブ経過時間、待機中はステータスが `Needs you` になる
-- 完了時は `Run finished` カード(入力 / 出力 / キャッシュ / コスト / ターン数 / 実行時間)
-- 承認ゲートを通過したフェーズでは `Approve …` / `Run next: …` / `Run implementation` を表示(`getPhaseActions`)
-- ヘッダーの **Overview** で Spec ポートフォリオを開ける。全Run一覧・`Clear finished`・`Open tab` は廃止。各タブで `Copy prompt` / `Trace` / `Cancel`(完了後は `Re-run` / `Trace` / `Close`) を提供し、タブの Close は記録と実行を維持する。停止は明示的な Cancel で行う
-- Run タブは枠のないログ表示。上部の1段のツールバーに状態と操作をまとめ、履歴もカード枠を付けずに表示する。ログはタブの残りの高さを使い、手動リサイズ用グリップは表示しない。
-- セッションプレビューの `Session usage` は枠なしの横一列ステータスバー(狭い幅では折り返す)
+- `webview/runs.tsx` が assistant-ui の Thread / Message / Composer を構成し、`webview/messages.ts` が履歴と RunSegment をメッセージへ変換する
+- アシスタント出力は react-markdown + remark-gfm で見出し・箇条書き・表・コードブロックなどを表示。リンクはテキスト化し、画像は表示しない
+- ユーザー発言は背景付きで区別し、ツール呼び出し・ツール結果・system セグメントは表示しない
+- 実行中は `Claude is working…`、入力待ちは `Waiting for your response…` と表示
+- 質問カードはラジオボタン・チェックボックス・自由入力に対応し、すべての質問に回答して上矢印アイコンで送信する。権限確認は一度だけ許可 / 常に許可 / 拒否のアイコンを表示
+- 承認可能なフェーズでは承認 / 次フェーズ実行 / 実装実行のアイコンを表示(`getPhaseActions`)
+- 入力欄は角丸の一体型。左下に説明付き権限メニュー、右下に送信(上矢印) / 再開(再生) / 停止(四角)を配置。モデル選択は設けない
+- ボタンは透明な背景の Lucide アイコン。操作名はツールチップと aria-label で伝える。権限メニューは現在のモード名と説明を表示する
+- Overview / Save trace / Re-run / Open artifact ボタンは表示しない。タブを閉じても記録と実行を維持し、停止は四角アイコンで行う
 
 ### 完了後の継続(Continue)
 
-完了した run のカードには、そのセッションに追記する入力欄が出ます(明示的に `Close` するまで)。`Send`(または Enter)で `resume: <sessionId>` の新しいクエリを同じカード内で開始し、ログと usage を引き継ぎます。エージェントが本文テキストで質問を返した場合も、そのまま回答して作業を続けられます(AskUserQuestion の選択肢カードが出ている場合はそちらで回答)。
+完了した Run の入力欄から追加指示を送り、`resume: <sessionId>` の新しいクエリを同じタブで開始します。過去の会話を保持し、追加指示はユーザー発言として追記します。質問カードの回答待ち・実行中は通常の会話入力を無効にします。
+
+セッションのプレビューでは、入力欄の左下で権限モードを選び、再生アイコンで Runs 内の実行を再開します。ヘッダーのターミナルアイコンから対話ターミナルでも再開できます。
 
 ### 使用量とデバッグ
 
-- `result.modelUsage`(全モデル合計)を権威値として、入力 / 出力 / キャッシュ(読み取り・書き込み)/ コストを表示する
-- assistant メッセージの usage はプロバイダによって 0 のことがあるため、0 のターンは行を作らない(最終値は result で確定)
-- ターン別の `Token usage · N turns` 表(In / Out / Cache read / Cache write / Gap)を折りたたみ表示
-- `Trace` ボタンは**実行中でも押せる**(その時点のスナップショット。JSON に `snapshot: true` が入る)。完了カードのヘッダー / `Run finished` サマリ内の `Save trace`、コマンドパレットの `cc-sdd: Save Last Run Trace` からも保存できる。出力先は `.kiro/runs/<timestamp>-<skill>-<feature>.json`(usage / turnUsage / segments / history / summary)
-- セッションのプレビューカードでも `Trace` を押せる(そのセッションの履歴と usage を `.kiro/runs/session-<timestamp>-<id>.json` に保存)
-- `permission_denials` はサマリの統計行に `denied N` として表示
+- 入力欄の上にモデル名、入力 / 出力トークン、キャッシュ読み取り、コストを表示。完了時は summary の usage / cost を優先する
+- ターン別 usage、キャッシュ書き込み、権限拒否件数などは内部状態とトレースに保持するが、現在の画面に専用の表や統計行は表示しない
+- コマンドパレットの `cc-sdd: Save Last Run Trace` で最新 Run を保存する。出力先は `.kiro/runs/<timestamp>-<skill>-<feature>.json`。実行中の保存はその時点のスナップショット(`snapshot: true`)
+- セッションプレビューの履歴や usage も RunState に保持され、最新 Run のトレースに含まれる
 
 ### 権限モードの既定
 

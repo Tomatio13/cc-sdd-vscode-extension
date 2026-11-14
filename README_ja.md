@@ -11,14 +11,14 @@
 このワークベンチは、実装タスクを統合した Specs ビューと Sessions 履歴タイムライン、2つのパネルで構成されます。
 
 - **Specs / Sessions** — 作業対象の Spec を選び、Requirements → Design → Tasks → Implementation → Verification の工程、実行状態、タスク、セッション再開を対応するビューで扱います。
-- **Runs** — ツール呼び出し・Markdown 出力・進捗を1つのパネルにストリーミング表示。権限確認と `AskUserQuestion` も同じパネルで回答できます。
+- **Runs** — assistant-ui の会話画面で Markdown の応答と進捗を表示。権限確認と `AskUserQuestion` の単一選択・複数選択・自由入力にその場で回答できます。ツール実行ログは表示しません。
 - **Overview** — 上位への進捗報告に使うリポジトリ全体のスナップショット。全体件数、要注意の状態、進行中 Spec の工程・実装進捗・検証状態、検証済みの完了を表示し、報告文をコピーできます。承認・実行は各作業者の Specs 側で行います。
 
 設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
 Specs は、工程を点と線でつなぐサイドバーのタイムラインです。実装タスクの進捗、承認・実行操作、このウィンドウの最近の Run（最大5件）を表示します。実装タスクは各 Spec の Implementation 配下に統合し、完了分は折りたたみます。独立した Tasks ビューは廃止し、Sessions も同じモノクロのタイムライン表示です。実行中を上部、過去の履歴を最終活動の新しい順に並べ、詳細と再開操作は展開時に表示します。更新時は展開状態と閲覧位置を保持します。
 
-Runs は 1 Run = 1 タブです。タブ名は Spec 名と工程名を表示し、同じ Run やセッションの再表示では既存タブを再利用します。タブを閉じても実行は続き、停止には Cancel を使います。`cc-sdd: Show Runs Console` は入力待ちを先頭にした Run 選択メニューを開きます（1件なら直接表示）。Sessions の履歴も専用タブで開きます。
+Runs は 1 Run = 1 タブです。タブ名は Spec 名と工程名を表示し、同じ Run やセッションの再表示では既存タブを再利用します。タブを閉じても実行は続き、停止には四角の停止アイコンを使います。`cc-sdd: Show Runs Console` は入力待ちを先頭にした Run 選択メニューを開きます（1件なら直接表示）。Sessions の履歴も専用タブで開きます。角丸の入力欄から追加指示を送り、左下のメニューで権限モードを選べます。送信・再開・停止・フェーズ操作はツールチップ付きアイコンで表示し、モデル選択は設けていません。
 
 ## フローの対応範囲
 
@@ -49,6 +49,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 - **Overview ポートフォリオ** — 上位への進捗報告に使うリポジトリ全体のスナップショット。全体件数、要注意の状態、進行中 Spec の工程・実装進捗・検証状態、検証済みの完了を表示し、報告文をコピーできます。承認・実行は各作業者の Specs 側で行います。
 - **Task board** — 選択中 Spec 名を常時表示。実装タスクと Verification セクション（検証結果・チェック項目・開始/再検証/レポートを開く）を分離。完了タスクは折りたたみ、次の候補・実行中・依存待ちを区別。タスク単体 / ここから残りを実行、tasks.md の該当行を開く、実行中の Run を開く操作に対応
 - **Sessions** — 初期表示は選択中 Spec。全 Spec に切り替え可能。active / waiting と history を分け、Spec・工程（検証を含む）・状態・最終活動を表示。履歴は resume、実行中は関連 Run を開く
+- **Run insights** — 入力欄の上にモデル名、入力・出力トークン、キャッシュ読み取り、コストを表示。`cc-sdd: Save Last Run Trace` で最新 Run のトレースを `.kiro/runs/*.json` に保存できます
 - **Status bar** — アクティブ spec と共通の next action を常時表示。run 実行中は `N waiting · M running` も表示
 - **Auto refresh** — `.kiro/` 配下を監視し、変更時に再読込。フォーカス復帰時と spec 配下の保存時にも再検証
 - **Installer** — 好きな統合を選んで `npx cc-sdd@latest` を実行
@@ -118,7 +119,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | --- | --- |
 | `claude` | ターミナルで `claude "/kiro-… <feature>"` を実行 |
 | `claude-vscode` | Claude Code for VS Code のパネルにプロンプトを補完。拡張側の preferred location（サイドバー or エディタタブ）に追従。Enter で実行 |
-| `claude-console` | Claude Agent SDK 経由で headless 実行し、**cc-sdd Runs** コンソールに進捗をストリーミング表示。権限確認と `AskUserQuestion` はコンソール内のボタンで回答できる(requirements / design の質問も VS Code 内で完結) |
+| `claude-console` | Claude Agent SDK 経由で headless 実行し、**cc-sdd Runs** コンソールに進捗をストリーミング表示。権限確認と `AskUserQuestion` は会話内のフォームで回答できます(requirements / design の質問も VS Code 内で完結) |
 | `copilot` | Copilot Chat にプロンプトを流し込む |
 | `opencode` | ターミナルで `opencode run "/kiro-… <feature>"` を実行 |
 | `custom` | `ccSdd.customCommand` のテンプレートを実行 |
@@ -128,9 +129,9 @@ Copilot Chat を開けない場合は、プロンプトをクリップボード�
 
 ### Sessions
 
-**Sessions** ビューは `~/.claude/projects/<encoded-workspace>/*.jsonl` を読み、記録された `cwd` が現在のワークスペースと一致するセッションだけを新しい順に表示します。ホバーで最後のアシスタント発話を確認でき、**クリックするとトランスクリプト全体の読み取り専用プレビュー**が Runs コンソールに開きます。同じカード内の継続メッセージ入力欄と権限モード選択から **Resume in console** を押すと、**その場で**ライブ実行に切り替わります(追加ダイアログなし)。**Terminal** ボタンは `claude --resume` を起動します。右クリックメニューには以下もあります:
+**Sessions** ビューは `~/.claude/projects/<encoded-workspace>/*.jsonl` を読み、記録された `cwd` が現在のワークスペースと一致するセッションだけを新しい順に表示します。ホバーで最後のアシスタント発話を確認でき、**クリックすると会話の読み取り専用プレビュー**が Runs コンソールに開きます。入力欄の左下で権限モードを選び、継続メッセージを入力して再生アイコンを押すと、**その場で**ライブ実行に切り替わります(追加ダイアログなし)。ターミナルアイコンは `claude --resume` を起動します。右クリックメニューには以下もあります:
 
-- **Resume in Runs console** — 同じセッションを headless で継続(Claude Agent SDK の `resume`)。権限モードは通常どおり選択。保存済みのトランスクリプトは **Session history** ブロックとして表示され、過去のやり取りがそのまま読めます
+- **Resume in Runs console** — 同じセッションを headless で継続(Claude Agent SDK の `resume`)。権限モードは通常どおり選択。保存済みの会話を新しい応答の前に表示します(ツール実行ログは省略)
 - **Resume in terminal** — `claude --resume <session-id>` を対話ターミナルで起動
 - **Open raw transcript** / **Copy session id** — 調査・スクリプト用
 

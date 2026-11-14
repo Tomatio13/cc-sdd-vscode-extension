@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunsConsole } from '../../src/ui/runsConsole';
 
-const mocks = vi.hoisted(() => ({ panels: [] as any[], runners: [] as any[], pick: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  panels: [] as any[],
+  runners: [] as any[],
+  pick: vi.fn(),
+}));
 vi.mock('vscode', () => ({
   EventEmitter: class {
     event = vi.fn();
@@ -9,6 +13,10 @@ vi.mock('vscode', () => ({
     dispose = vi.fn();
   },
   ViewColumn: { Active: 1 },
+  Uri: {
+    file: (value: string) => value,
+    joinPath: (...parts: string[]) => parts.join('/'),
+  },
   window: {
     showInformationMessage: vi.fn(),
     showWarningMessage: vi.fn(),
@@ -25,6 +33,7 @@ vi.mock('vscode', () => ({
         webview: {
           html: '',
           cspSource: 'test:',
+          asWebviewUri: (uri: unknown) => String(uri),
           postMessage: vi.fn(),
           onDidReceiveMessage: (callback: any) => {
             panel.receive = callback;
@@ -46,7 +55,11 @@ vi.mock('vscode', () => ({
 }));
 vi.mock('../../src/run/claudeRunner', () => ({
   startClaudeRun: (input: any) => {
-    const handle = { cancel: vi.fn(), respondPermission: vi.fn(), respondQuestions: vi.fn() };
+    const handle = {
+      cancel: vi.fn(),
+      respondPermission: vi.fn(),
+      respondQuestion: vi.fn(),
+    };
     mocks.runners.push({ input, handle });
     return handle;
   },
@@ -98,15 +111,22 @@ describe('one run per tab', () => {
       'beta · Verification',
     ]);
     for (const [index, panel] of mocks.panels.entries()) {
-      const messages = panel.webview.postMessage.mock.calls.map((call: any[]) => call[0]);
+      const messages = panel.webview.postMessage.mock.calls.map(
+        (call: any[]) => call[0],
+      );
       expect(
         messages
           .filter((m: any) => m.type === 'state')
-          .every((m: any) => m.runs.length === 1 && m.runs[0].id === `run-${index + 1}`),
+          .every(
+            (m: any) =>
+              m.runs.length === 1 && m.runs[0].id === `run-${index + 1}`,
+          ),
       ).toBe(true);
-      expect(messages.filter((m: any) => m.type === 'history').map((m: any) => m.runId)).toEqual([
-        `run-${index + 1}`,
-      ]);
+      expect(
+        messages
+          .filter((m: any) => m.type === 'history')
+          .map((m: any) => m.runId),
+      ).toEqual([`run-${index + 1}`]);
     }
   });
   it('delivers history again when a newly loaded webview is ready', () => {
@@ -114,8 +134,12 @@ describe('one run per tab', () => {
     const panel = mocks.panels[0];
     panel.webview.postMessage.mockClear();
     panel.receive({ type: 'ready' });
-    const messages = panel.webview.postMessage.mock.calls.map((call: any[]) => call[0]);
-    expect(messages.find((message: any) => message.type === 'history')).toMatchObject({
+    const messages = panel.webview.postMessage.mock.calls.map(
+      (call: any[]) => call[0],
+    );
+    expect(
+      messages.find((message: any) => message.type === 'history'),
+    ).toMatchObject({
       runId: 'run-1',
       segments: [{ kind: 'text', text: 'history that must not disappear' }],
     });
@@ -158,12 +182,17 @@ describe('one run per tab', () => {
   it('preserves active runs beyond the history limit', () => {
     for (let i = 0; i < 32; i++) start('spec-' + i);
     expect(consoleView.getRuns()).toHaveLength(32);
-    expect(consoleView.getRuns().every((run) => run.status === 'running')).toBe(true);
+    expect(consoleView.getRuns().every((run) => run.status === 'running')).toBe(
+      true,
+    );
   });
   it('prioritizes waiting runs in the picker', async () => {
     start('waiting');
     start('running');
-    mocks.runners[0].input.onEvent({ kind: 'pending', pending: { id: 'p', kind: 'permission' } });
+    mocks.runners[0].input.onEvent({
+      kind: 'pending',
+      pending: { id: 'p', kind: 'permission' },
+    });
     mocks.pick.mockImplementation((items: any[]) => Promise.resolve(items[0]));
     consoleView.show();
     await Promise.resolve();
@@ -173,5 +202,74 @@ describe('one run per tab', () => {
     });
     expect(mocks.panels).toHaveLength(2);
     expect(mocks.panels[0].reveal).toHaveBeenCalled();
+  });
+});
+
+describe('assistant-ui interactions', () => {
+  it('ignores stale permission responses and routes the current response', () => {
+    start();
+    mocks.runners[0].input.onEvent({
+      kind: 'pending',
+      pending: { id: 'current', kind: 'permission' },
+    });
+    mocks.panels[0].receive({
+      type: 'permission',
+      runId: 'run-1',
+      pendingId: 'stale',
+      decision: 'allow',
+    });
+    expect(mocks.runners[0].handle.respondPermission).not.toHaveBeenCalled();
+    expect(consoleView.getRuns()[0].pending?.id).toBe('current');
+    mocks.panels[0].receive({
+      type: 'permission',
+      runId: 'run-1',
+      pendingId: 'current',
+      decision: 'allow',
+    });
+    expect(mocks.runners[0].handle.respondPermission).toHaveBeenCalledWith(
+      'current',
+      'allow',
+    );
+  });
+  it('routes multi-question answers to the existing runner', () => {
+    start();
+    mocks.runners[0].input.onEvent({
+      kind: 'pending',
+      pending: {
+        id: 'question',
+        kind: 'question',
+        questions: [
+          { question: 'Which?', options: [{ label: 'A' }] },
+          { question: 'Why?', options: [{ label: 'B' }] },
+        ],
+      },
+    });
+    mocks.panels[0].receive({
+      type: 'answer',
+      runId: 'run-1',
+      pendingId: 'question',
+      labels: ['A', 'custom answer'],
+    });
+    expect(mocks.runners[0].handle.respondQuestion).toHaveBeenCalledWith(
+      'question',
+      { 'Which?': 'A', 'Why?': 'custom answer' },
+    );
+  });
+  it('continues the same session and records the follow-up as a user message', () => {
+    start();
+    const run = (consoleView as any).runs[0];
+    run.sessionId = 'session-1';
+    mocks.runners[0].input.onExit(0, false);
+    mocks.panels[0].receive({
+      type: 'continue',
+      runId: 'run-1',
+      instruction: 'Please continue',
+    });
+    expect(mocks.runners[1].input.resume).toBe('session-1');
+    expect(consoleView.getRuns()[0].segments.at(-1)).toEqual({
+      kind: 'user',
+      text: 'Please continue',
+    });
+    expect(mocks.panels).toHaveLength(1);
   });
 });

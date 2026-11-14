@@ -22,8 +22,9 @@ npm run package     # VSIX 作成
 
 | コマンド | 内容 |
 | --- | --- |
-| `npm run build` | `out/` を削除して **esbuild で単一バンドル**(`out/extension.js`) |
-| `npm run watch` | 同上を watch |
+| `npm run build` | `out/` を削除し、拡張ホスト(`out/extension.js`)と Runs の React/CSS(`out/runs.js` / `out/runs.css`)を esbuild で生成 |
+| `npm run watch` | 拡張ホスト側を watch |
+| `npm run watch:webview` | Runs の React/CSS を watch（別ターミナル） |
 | `npm run check` | `tsc --noEmit`(型チェックのみ。emit しない) |
 | `npm test` | vitest(1 回) |
 | `npm run test:watch` | vitest(watch) |

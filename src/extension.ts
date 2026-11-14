@@ -658,6 +658,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const runSkillOptions = { consoleLauncher: launchConsoleRun };
 
   const runsConsole = new RunsConsole({
+    extensionUri: context.extensionUri,
     getWorkspaceRoot: () => workspaceRoot(),
     getBinary: () =>
       resolveClaudeExecutable(configuration().get<string>('claudePath', 'claude')),
