@@ -139,31 +139,30 @@ sequenceDiagram
 | `permission` | `{ pendingId, decision: allow \| always \| deny }` |
 | `answer` | `{ pendingId, labels: string[] }`(質問への回答) |
 | `approve` / `runPhase` / `runImpl` | 実行後のフェーズ操作 |
-| `clearFinished` | 完了 run をまとめて削除 |
 | `resumeConsole` / `resumeTerminal` | プレビューカードからのセッション再開 |
 | `overview` | Overview ポートフォリオを開く(ヘッダーの **Overview** ボタン) |
 
 その他:
 
-- パネルは「メイン(全 run)」+「run ごとのポップアウトタブ」。`panels: Map<WebviewPanel, runId | undefined>` で管理
+- 1 Run = 1 タブ。`panels: Map<WebviewPanel, runId>` で管理し、同じ Run やセッションは既存タブを再利用。タブ名は Spec 名と工程名
 - 更新は 80ms で合流(`updateAll` のタイマー)
 - Webview の CSP は nonce 付き。`style-src` のみ `'unsafe-inline'` を許可
 - 履歴は「プレビュー/再開時のみ」。展開時に遅延レンダリングし、HTML 文字列をキャッシュ
 
 ### RunsStatusBar / Overview との連携
 
-ローカル run の状態は Runs コンソール・`RunsStatusBar`・Overview が使います。Overview では「この VS Code ウィンドウで取得できた記録」として明記します。
+ローカル run の状態は Runs タブ・`RunsStatusBar`・Specs・Sessions が使います。Overview の報告集計はリポジトリの記録に限定します。
 
 | API | 用途 |
 | --- | --- |
-| `getRuns(): RunState[]` | スナップショット。`history` は落とす(RunsStatusBar / Overview では不要) |
-| `onDidChange` | `updateAll()` のたびに発火。RunsStatusBar と Overview のローカル実行状態更新に使う |
+| `getRuns(): RunState[]` | スナップショット。サイドバーと RunsStatusBar のために `history` を落とす |
+| `onDidChange` | `updateAll()` のたびに発火。RunsStatusBar とサイドバーの実行状態更新、および Overview の再取得に使う |
 | `openRun(runId)` | run 専用タブを開く |
 | `openOverview` オプション | Runs コンソールのヘッダー **Overview** ボタン |
 
-- run は**このウィンドウのメモリ**にのみ保持(`RUN_LIMIT = 30`)。再起動で消える
-- Overview は `spec.json` / `tasks.md` / `impl-validation.md` / roadmap と、このウィンドウの run 記録を突き合わせる(詳細は [06-overview.md](./06-overview.md))
-- ステータスバーの `N waiting · M running` は `onDidChange` のたびに `getRuns()` から数え直し、クリックで Runs コンソールを開く
+- run は**このウィンドウのメモリ**にのみ保持。通常は履歴30件を上限に整理するが、実行中・入力待ち・開いているタブは削除しない。再起動でメモリ内の記録は消える
+- Overview は `spec.json` / `tasks.md` / `impl-validation.md` の記録を集計し、ローカル Run 状態は報告へ含めない(詳細は [06-overview.md](./06-overview.md))
+- ステータスバーの `N waiting · M running` は `onDidChange` のたびに `getRuns()` から数え直し、クリックで Run 選択メニューを開く（入力待ちを優先。1件なら直接開く）
 
 ### コンソールの描画
 
@@ -172,8 +171,8 @@ sequenceDiagram
 - 実行中は 2px の進捗線 + ライブ経過時間、待機中はステータスが `Needs you` になる
 - 完了時は `Run finished` カード(入力 / 出力 / キャッシュ / コスト / ターン数 / 実行時間)
 - 承認ゲートを通過したフェーズでは `Approve …` / `Run next: …` / `Run implementation` を表示(`getPhaseActions`)
-- ヘッダーの **Overview** で Spec ポートフォリオを開ける。`Clear finished` は完了カードを閉じる(実行中とセッションプレビューは残す)。run カード側は `Open tab` / `Copy prompt` / `Trace` / `Cancel`(完了後は `Re-run` / `Trace` / `Close`)
-- 各カードの下端（`Session usage` ステータスバーの下）のグリップをドラッグするとログの高さを変更できる。ダブルクリックで既定の高さに戻る。グリップにフォーカスして ↑ / ↓ キーでも 24px ずつ調整できる
+- ヘッダーの **Overview** で Spec ポートフォリオを開ける。全Run一覧・`Clear finished`・`Open tab` は廃止。各タブで `Copy prompt` / `Trace` / `Cancel`(完了後は `Re-run` / `Trace` / `Close`) を提供し、タブの Close は記録と実行を維持する。停止は明示的な Cancel で行う
+- Run タブは枠のないログ表示。上部の1段のツールバーに状態と操作をまとめ、履歴もカード枠を付けずに表示する。ログはタブの残りの高さを使い、手動リサイズ用グリップは表示しない。
 - セッションプレビューの `Session usage` は枠なしの横一列ステータスバー(狭い幅では折り返す)
 
 ### 完了後の継続(Continue)

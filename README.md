@@ -18,6 +18,8 @@ Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 Specs uses a theme-aware sidebar timeline with connected stage markers, implementation task progress, approval/run actions, and the five most recent runs in this window. Implementation tasks are embedded under each spec’s Implementation stage, with completed tasks folded away. The standalone Tasks view has been removed; Sessions uses the same monochrome timeline style: active sessions first, then history ordered by last activity, with details and resume actions on expansion. Expansion and reading position are preserved on refresh.
 
+Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use Cancel to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab.
+
 ## What it does
 
 - **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the Specs timeline shows Steering presence (click to generate; use the Run button to re-run it after the codebase changes) and roadmap.md order/dependencies when they exist.

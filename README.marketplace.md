@@ -12,6 +12,8 @@ Specs uses a theme-aware sidebar timeline with connected stage markers, implemen
 
 Verification launches explicitly request an `impl-validation.md` evidence report with a `DECISION` line. A `spec.json` validation field alone remains unconfirmed and offers revalidation; a finished run alone does not mark a spec complete.
 
+Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use Cancel to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab.
+
 ## Requirements
 
 - VS Code 1.90 or higher

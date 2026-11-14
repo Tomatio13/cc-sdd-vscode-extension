@@ -84,9 +84,8 @@ const formatCost = (costUsd?: number): string =>
     : '';
 
 export class RunsConsole {
-  // Open webview panels: undefined filter = the main console (all runs),
-  // a run id = a single-run pop-out tab.
-  private panels = new Map<vscode.WebviewPanel, string | undefined>();
+  // Each panel owns exactly one run; closing a tab does not cancel its runner.
+  private panels = new Map<vscode.WebviewPanel, string>();
   private runs: RunState[] = [];
   private seq = 0;
   private handles = new Map<string, ClaudeRunHandle>();
@@ -132,9 +131,7 @@ export class RunsConsole {
       });
     }
     this.runs.push(run);
-    if (this.runs.length > RUN_LIMIT) {
-      this.runs = this.runs.slice(-RUN_LIMIT);
-    }
+    this.trimRuns();
 
     this.attachRunner(run, {
       prompt: input.prompt,
@@ -142,7 +139,7 @@ export class RunsConsole {
       resume: input.resume,
     });
 
-    this.ensureMainPanel();
+    this.openRunTab(run.id);
     this.updateAll();
     for (const panel of this.panels.keys()) {
       this.pushHistoryTo(panel);
@@ -219,8 +216,31 @@ export class RunsConsole {
   }
 
   show(): void {
-    this.ensureMainPanel();
-    this.updateAll();
+    const rank = (run: RunState): number => (run.pending ? 0 : run.status === 'running' ? 1 : 2);
+    const runs = [...this.runs].sort((a, b) => rank(a) - rank(b) || b.startedAt - a.startedAt);
+    if (!runs.length) {
+      void vscode.window.showInformationMessage(
+        'cc-sdd: no runs yet. Start a phase from Specs or open a session from Sessions.',
+      );
+      return;
+    }
+    if (runs.length === 1) {
+      this.openRun(runs[0].id);
+      return;
+    }
+    void vscode.window
+      .showQuickPick(
+        runs.map((run) => ({
+          label: run.feature || run.skill,
+          description: `${this.stageLabel(run.skill)} · ${run.pending ? 'Input waiting' : run.status}`,
+          detail: new Date(run.startedAt).toLocaleString(),
+          runId: run.id,
+        })),
+        { placeHolder: 'Open a run tab — waiting runs first', matchOnDescription: true },
+      )
+      .then((picked) => {
+        if (picked) this.openRun(picked.runId);
+      });
   }
 
   /** Read-only view for the overview board (history is dropped). */
@@ -270,6 +290,13 @@ export class RunsConsole {
     usage?: TokenUsage;
     costUsd?: number;
   }): void {
+    const existing = this.runs.find(
+      (run) => run.preview?.sessionId === input.sessionId || run.sessionId === input.sessionId,
+    );
+    if (existing) {
+      this.openRun(existing.id);
+      return;
+    }
     this.seq += 1;
     const run: RunState = {
       id: `run-${this.seq}`,
@@ -290,10 +317,8 @@ export class RunsConsole {
       startedAt: Date.now(),
     };
     this.runs.push(run);
-    if (this.runs.length > RUN_LIMIT) {
-      this.runs = this.runs.slice(-RUN_LIMIT);
-    }
-    this.ensureMainPanel();
+    this.trimRuns();
+    this.openRunTab(run.id);
     this.updateAll();
     for (const panel of this.panels.keys()) {
       this.pushHistoryTo(panel);
@@ -316,25 +341,37 @@ export class RunsConsole {
     this.changed.dispose();
   }
 
-  private ensureMainPanel(): void {
-    const main = [...this.panels.entries()].find(([, filter]) => filter === undefined);
-    if (main) {
-      if (!main[0].visible) {
-        main[0].reveal(undefined, true);
-      }
-      return;
-    }
+  private stageLabel(skill: string): string {
+    const labels: Record<string, string> = {
+      'kiro-spec-requirements': 'Requirements',
+      'kiro-spec-design': 'Design',
+      'kiro-spec-tasks': 'Task planning',
+      'kiro-impl': 'Implementation',
+      'kiro-validate-impl': 'Verification',
+      'kiro-validate-gap': 'Gap check',
+      'kiro-validate-design': 'Design check',
+      'kiro-steering': 'Steering',
+      'kiro-discovery': 'Discovery',
+      'kiro-spec-init': 'Spec init',
+      session: 'Session',
+    };
+    return labels[skill] ?? skill.replace(/^kiro-/, '');
+  }
 
-    const panel = vscode.window.createWebviewPanel(
-      'ccSdd.runs',
-      'cc-sdd Runs',
-      vscode.ViewColumn.Active,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      },
-    );
-    this.attachPanel(panel, undefined);
+  private trimRuns(): void {
+    // Keep every live run and every open tab, even when there are over 30.
+    const openIds = new Set(this.panels.values());
+    for (const run of [...this.runs]) {
+      if (this.runs.length <= RUN_LIMIT) break;
+      if (
+        run.status === 'running' ||
+        run.pending ||
+        this.handles.has(run.id) ||
+        openIds.has(run.id)
+      )
+        continue;
+      this.runs = this.runs.filter((candidate) => candidate.id !== run.id);
+    }
   }
 
   private openRunTab(runId: string): void {
@@ -344,14 +381,12 @@ export class RunsConsole {
     }
     const existing = [...this.panels.entries()].find(([, filter]) => filter === runId);
     if (existing) {
-      if (!existing[0].visible) {
-        existing[0].reveal(undefined, true);
-      }
+      existing[0].reveal(undefined, false);
       return;
     }
     const panel = vscode.window.createWebviewPanel(
       'ccSdd.run',
-      `cc-sdd · ${run.feature || run.skill}`,
+      `${run.feature || 'Run'} · ${this.stageLabel(run.skill)}`,
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -361,7 +396,7 @@ export class RunsConsole {
     this.attachPanel(panel, runId);
   }
 
-  private attachPanel(panel: vscode.WebviewPanel, filter: string | undefined): void {
+  private attachPanel(panel: vscode.WebviewPanel, filter: string): void {
     panel.onDidChangeViewState(
       (event) => {
         if (event.webviewPanel.visible) {
@@ -388,8 +423,9 @@ export class RunsConsole {
       delivered = new Set<string>();
       this.deliveredHistory.set(panel, delivered);
     }
+    const runId = this.panels.get(panel);
     for (const run of this.runs) {
-      if (!run.history?.length || delivered.has(run.id)) {
+      if (run.id !== runId || !run.history?.length || delivered.has(run.id)) {
         continue;
       }
       delivered.add(run.id);
@@ -399,7 +435,10 @@ export class RunsConsole {
 
   private pushTo(panel: vscode.WebviewPanel): void {
     const filter = this.panels.get(panel);
-    const list = filter ? this.runs.filter((run) => run.id === filter) : this.runs;
+    const list = this.runs.filter((run) => run.id === filter);
+    const run = list[0];
+    if (run)
+      panel.title = `${run.feature || 'Run'} · ${this.stageLabel(run.skill)}${run.pending ? ' · Input waiting' : ''}`;
     void panel.webview.postMessage({ type: 'state', runs: snapshot(list) });
   }
 
@@ -424,35 +463,21 @@ export class RunsConsole {
     return this.runs.find((run) => run.id === runId);
   }
 
-  private removeRun(runId: string): void {
-    this.handles.get(runId)?.cancel();
-    this.handles.delete(runId);
-    this.runs = this.runs.filter((run) => run.id !== runId);
-    for (const [panel, filter] of [...this.panels.entries()]) {
-      if (filter === runId) {
-        panel.dispose();
-      }
-    }
-    this.updateAll();
-  }
-
   private handleMessage(panel: vscode.WebviewPanel, message: unknown): void {
     if (typeof message !== 'object' || message === null) {
       return;
     }
     const typed = message as ConsoleMessage;
+    const owner = this.panels.get(panel);
+    if (typed.runId !== undefined && typed.runId !== owner) return;
     const run = this.byId(typed.runId);
 
     switch (typed.type) {
       case 'ready':
+        // Initial postMessage calls may precede the webview's message listener.
+        this.deliveredHistory.delete(panel);
         this.pushTo(panel);
         this.pushHistoryTo(panel);
-        return;
-      case 'clearFinished':
-        this.runs = this.runs.filter(
-          (candidate) => candidate.status === 'running' || candidate.status === 'preview',
-        );
-        this.updateAll();
         return;
       case 'overview':
         this.options.openOverview?.();
@@ -463,15 +488,8 @@ export class RunsConsole {
           void vscode.window.showInformationMessage('cc-sdd: prompt copied.');
         }
         return;
-      case 'popout':
-        if (run) {
-          this.openRunTab(run.id);
-        }
-        return;
       case 'close':
-        if (run) {
-          this.removeRun(run.id);
-        }
+        panel.dispose();
         return;
       case 'cancel':
         if (run) {
@@ -522,7 +540,7 @@ export class RunsConsole {
           const mode =
             typeof typed.permissionMode === 'string' && typed.permissionMode
               ? typed.permissionMode
-              : run.preview.defaultPermissionMode ?? 'default';
+              : (run.preview.defaultPermissionMode ?? 'default');
           this.resumePreview(run, instruction, mode);
         }
         return;
@@ -624,10 +642,7 @@ export class RunsConsole {
     try {
       await fsPromises.mkdir(dir, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filePath = path.join(
-        dir,
-        `session-${stamp}-${run.preview.sessionId.slice(0, 8)}.json`,
-      );
+      const filePath = path.join(dir, `session-${stamp}-${run.preview.sessionId.slice(0, 8)}.json`);
       const payload = {
         savedAt: new Date().toISOString(),
         session: {
@@ -696,36 +711,15 @@ export class RunsConsole {
     }
     #app { height: 100vh; display: flex; flex-direction: column; }
 
-    /* Header: page title, live counts, two quiet actions. */
-    .app-header {
-      flex: none; display: flex; align-items: center; gap: 12px;
-      min-height: 56px; padding: 0 20px;
-      border-bottom: 1px solid var(--cc-border); background: var(--cc-bg);
-    }
-    .app-title { font-size: 15px; font-weight: 600; letter-spacing: 0; }
-    .app-hint { font-size: 12px; color: var(--cc-muted); }
-    .app-counts {
-      display: flex; align-items: center; gap: 8px; margin-left: 4px;
-      font-family: var(--cc-mono); font-size: 11px;
-      color: var(--cc-muted); font-variant-numeric: tabular-nums;
-    }
-    .app-counts span + span::before {
-      content: "·"; margin-right: 8px; color: var(--cc-muted);
-    }
-    .app-counts .needs { color: var(--cc-accent-ink); }
-    .app-counts .running { color: var(--cc-warn-ink); }
-    .app-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-    .app-actions .text-button { min-height: 28px; padding: 0 8px; }
-
-    /* Rolling list of runs. The single-run case fills the window. */
+    /* A single run fills the editor tab. */
     .runs {
       flex: 1 1 auto; min-height: 0; overflow-y: auto;
-      padding: 20px; display: flex; flex-direction: column; gap: 16px;
+      padding: 0; display: flex; flex-direction: column; gap: 0;
     }
     .run {
       position: relative; flex: none; display: flex; flex-direction: column;
-      border: 1px solid var(--cc-border); border-radius: var(--cc-radius-lg);
-      background: var(--cc-card); overflow: hidden;
+      border: 0; border-radius: 0;
+      background: transparent; overflow: hidden;
     }
     .runs > .run:only-child { flex: 1 1 auto; min-height: 0; }
     .runs > .run:only-child .log { flex: 1 1 auto; max-height: none; }
@@ -734,7 +728,7 @@ export class RunsConsole {
     .head {
       flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       min-height: 44px; padding: 8px 12px 8px 16px;
-      border-bottom: 1px solid var(--cc-border); background: var(--cc-surface);
+      border-bottom: 1px solid var(--cc-border); background: transparent;
     }
     .title { font-size: 14px; font-weight: 500; line-height: 1.3; }
     .skilltag { font-family: var(--cc-mono); font-size: 11px; color: var(--cc-muted); }
@@ -774,27 +768,6 @@ export class RunsConsole {
       min-height: 120px; max-height: 380px; overflow-y: auto;
       font-size: 13px; line-height: 1.65;
     }
-    .runs > .run .log.resized { flex: none; max-height: none; }
-    .log-resize {
-      flex: none; width: 100%; height: 12px; min-height: 12px; padding: 0;
-      display: flex; align-items: center; justify-content: center;
-      background: transparent; border: none; border-radius: 0;
-      cursor: ns-resize; touch-action: none;
-    }
-    .log-resize::before {
-      content: ""; width: 32px; height: 2px; border-radius: 1px;
-      background: var(--cc-border-strong);
-      box-shadow: 0 4px 0 var(--cc-border-strong);
-      transform: translateY(-2px);
-    }
-    .log-resize:hover { background: var(--cc-surface); }
-    .log-resize:hover::before, .log-resize:focus-visible::before {
-      background: var(--cc-muted);
-      box-shadow: 0 4px 0 var(--cc-muted);
-    }
-    .log-resize:focus-visible { outline: 1px solid var(--cc-accent); outline-offset: -1px; }
-    .log-resize:active { background: var(--cc-surface-strong); }
-    body.resizing, body.resizing * { cursor: ns-resize !important; user-select: none; }
     .event.system {
       display: flex; align-items: center; gap: 8px;
       color: var(--cc-muted); font-family: var(--cc-mono); font-size: 11px;
@@ -871,12 +844,11 @@ export class RunsConsole {
     .prose th { background: var(--cc-surface-strong); font-weight: 600; }
 
     .history {
-      border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm);
-      background: var(--cc-surface);
+      border: 0; border-radius: 0; background: transparent;
     }
     .history > summary {
       display: flex; align-items: center; gap: 8px;
-      cursor: pointer; padding: 8px 12px; list-style: none;
+      cursor: pointer; padding: 4px 0; list-style: none;
       font-size: 12px; font-weight: 500; color: var(--cc-muted);
     }
     .history > summary::-webkit-details-marker { display: none; }
@@ -885,9 +857,9 @@ export class RunsConsole {
       transition: transform .12s var(--cc-ease);
     }
     .history[open] > summary::before { transform: rotate(90deg); }
-    .history[open] > summary { border-bottom: 1px solid var(--cc-border); }
+    .history[open] > summary { border-bottom: 0; }
     .history-body {
-      position: relative; padding: 12px;
+      position: relative; padding: 8px 0;
       display: flex; flex-direction: column; gap: 8px;
     }
 
@@ -952,9 +924,9 @@ export class RunsConsole {
 
     /* Finished-run receipt */
     .summary {
-      margin: 0 16px 16px; padding: 12px 16px;
-      border: 1px solid var(--cc-border); border-radius: var(--cc-radius);
-      background: var(--cc-surface);
+      margin: 0; padding: 12px 16px;
+      border: 0; border-top: 1px solid var(--cc-border); border-radius: 0;
+      background: transparent;
     }
     .summary.is-error { border-color: color-mix(in srgb, var(--cc-error) 30%, transparent); }
     .summary-label {
@@ -976,7 +948,7 @@ export class RunsConsole {
     }
     .metrics > summary {
       display: flex; align-items: center; gap: 8px;
-      cursor: pointer; padding: 8px 12px; list-style: none;
+      cursor: pointer; padding: 4px 0; list-style: none;
       font-size: 12px; font-weight: 500; color: var(--cc-muted);
     }
     .metrics > summary::-webkit-details-marker { display: none; }
@@ -1233,7 +1205,6 @@ export class RunsConsole {
 
       let html = '<div class="head">';
       html += '<span class="lamp ' + esc(tone) + '"></span>';
-      html += '<span class="title">' + esc(run.feature || run.skill) + '</span>';
       html += '<span class="skilltag">/' + esc(run.skill) + '</span>';
       html += '<span class="status-text ' + esc(tone) + '">' + esc(label) + '</span>';
       html += '<span class="mode" title="Permission mode">' + esc(run.permissionMode) + '</span>';
@@ -1249,11 +1220,11 @@ export class RunsConsole {
         html += '<span class="elapsed">' + esc(duration) + '</span>';
       }
       html += '<span class="spacer"></span>';
+      html += textButton('overview', run.id, 'Overview');
       if (preview) {
         html += textButton('trace', run.id, 'Trace');
         html += textButton('close', run.id, 'Close');
       } else {
-        if (running) html += textButton('popout', run.id, 'Open tab');
         html += textButton('copy', run.id, 'Copy prompt');
         if (running) {
           html += textButton('trace', run.id, 'Trace');
@@ -1420,16 +1391,13 @@ export class RunsConsole {
       return html;
     }
 
-    const logHeights = {};
 
     function renderRun(run) {
       const running = run.status === 'running';
-      const logHeight = logHeights[run.id];
       let html = '<div class="run ' + (running ? 'running' : esc(run.status)) + '" id="' + esc(run.id) + '">';
       html += renderHead(run);
       if (running) html += '<div class="progress"><span></span></div>';
-      html += '<div class="log' + (logHeight ? ' resized' : '') + '"' +
-        (logHeight ? ' style="height:' + logHeight + 'px"' : '') + '>' +
+      html += '<div class="log">' +
         renderHistory(run) + renderItems(buildItems(run.segments)) + '</div>';
       if (run.status === 'preview') html += renderResumeBar(run);
       if (run.pending) html += renderPending(run, run.pending);
@@ -1441,9 +1409,6 @@ export class RunsConsole {
       if (!running && run.status !== 'preview' && run.sessionId) {
         html += renderContinueBar(run);
       }
-      html += '<button type="button" class="log-resize" data-run="' + esc(run.id) +
-        '" title="Drag to resize · Double-click to reset" aria-label="Resize log for ' +
-        esc(run.feature || run.skill) + '"></button>';
       html += '</div>';
       return html;
     }
@@ -1472,28 +1437,11 @@ export class RunsConsole {
 
     let latestRuns = {};
     let latestRunList = [];
-    let resizing = false;
     const selections = {};
-    function renderCounts(runs) {
-      const waiting = runs.filter(function (run) { return run.pending; }).length;
-      const running = runs.filter(function (run) {
-        return run.status === 'running' && !run.pending;
-      }).length;
-      const finished = runs.filter(function (run) {
-        return run.status === 'done' || run.status === 'error' || run.status === 'cancelled';
-      }).length;
-      const parts = [];
-      if (waiting) parts.push('<span class="needs">' + waiting + ' waiting</span>');
-      if (running) parts.push('<span class="running">' + running + ' running</span>');
-      if (finished) parts.push('<span>' + finished + ' finished</span>');
-      return parts.length ? '<span class="app-counts">' + parts.join('') + '</span>' : '';
-    }
-
     function render(runs) {
       latestRuns = {};
       latestRunList = runs;
       runs.forEach(function (run) { latestRuns[run.id] = run; });
-      if (resizing) return;
       const app = document.getElementById('app');
       const scroll = document.querySelector('.runs');
       const scrollTop = scroll ? scroll.scrollTop : 0;
@@ -1509,17 +1457,7 @@ export class RunsConsole {
         }
       });
 
-      let header = '<div class="app-header">';
-      header += '<span class="app-title">cc-sdd Runs</span>';
-      header += '<span class="app-hint">Phase runs in this window</span>';
-      header += renderCounts(runs);
-      header += '<span class="app-actions"><button class="secondary" data-act="overview">Overview</button>';
-      if (runs.some(function (run) {
-        return run.status === 'done' || run.status === 'error' || run.status === 'cancelled';
-      })) {
-        header += '<button class="text-button" data-act="clearFinished">Clear finished</button>';
-      }
-      header += '</span></div>';
+      const header = '';
 
       if (!runs.length) {
         app.innerHTML = header + '<div class="runs"><div class="empty-state">' +
@@ -1572,24 +1510,6 @@ export class RunsConsole {
     });
 
     document.getElementById('app').addEventListener('keydown', (event) => {
-      const resizeHandle = event.target.closest('.log-resize');
-      if (resizeHandle) {
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-          event.preventDefault();
-          const runId = resizeHandle.getAttribute('data-run');
-          const card = runId ? document.getElementById(runId) : null;
-          const log = card && card.querySelector('.log');
-          if (!log) return;
-          const current = logHeights[runId] || log.getBoundingClientRect().height;
-          const max = Math.max(160, window.innerHeight - 160);
-          const delta = event.key === 'ArrowDown' ? 24 : -24;
-          logHeights[runId] = Math.round(Math.min(max, Math.max(96, current + delta)));
-          render(latestRunList);
-          const nextHandle = document.querySelector('.log-resize[data-run="' + runId + '"]');
-          if (nextHandle) nextHandle.focus();
-        }
-        return;
-      }
       if (event.key !== 'Enter') return;
       const input = event.target.closest('.resume-input');
       if (!input) return;
@@ -1598,72 +1518,6 @@ export class RunsConsole {
         '[data-act="resumeConsole"][data-run="' + runId + '"], [data-act="continue"][data-run="' + runId + '"]',
       );
       if (button) button.click();
-    });
-
-    let dragState = null;
-    document.getElementById('app').addEventListener('pointerdown', (event) => {
-      const handle = event.target.closest('.log-resize');
-      if (!handle) return;
-      const runId = handle.getAttribute('data-run');
-      const card = runId ? document.getElementById(runId) : null;
-      const log = card && card.querySelector('.log');
-      if (!log) return;
-      event.preventDefault();
-      dragState = {
-        runId: runId,
-        log: log,
-        startY: event.clientY,
-        startHeight: log.getBoundingClientRect().height,
-        moved: false,
-      };
-      resizing = true;
-      document.body.classList.add('resizing');
-      if (handle.setPointerCapture) {
-        try {
-          handle.setPointerCapture(event.pointerId);
-        } catch {
-          // Pointer capture is optional; the window listeners still end the drag.
-        }
-      }
-    });
-
-    document.getElementById('app').addEventListener('pointermove', (event) => {
-      if (!dragState) return;
-      const delta = event.clientY - dragState.startY;
-      if (Math.abs(delta) > 1) dragState.moved = true;
-      const max = Math.max(160, window.innerHeight - 160);
-      const next = Math.round(Math.min(max, Math.max(96, dragState.startHeight + delta)));
-      dragState.log.style.height = next + 'px';
-      dragState.log.classList.add('resized');
-      logHeights[dragState.runId] = next;
-    });
-
-    function endResize() {
-      if (!dragState) return;
-      const moved = dragState.moved;
-      const runId = dragState.runId;
-      dragState = null;
-      resizing = false;
-      document.body.classList.remove('resizing');
-      if (!moved) return;
-      render(latestRunList);
-      const handle = document.querySelector('.log-resize[data-run="' + runId + '"]');
-      if (handle) handle.focus();
-    }
-    document.getElementById('app').addEventListener('pointerup', endResize);
-    document.getElementById('app').addEventListener('pointercancel', endResize);
-    window.addEventListener('pointerup', endResize);
-    window.addEventListener('pointercancel', endResize);
-    window.addEventListener('blur', endResize);
-
-    document.getElementById('app').addEventListener('dblclick', (event) => {
-      const handle = event.target.closest('.log-resize');
-      if (!handle) return;
-      const runId = handle.getAttribute('data-run');
-      delete logHeights[runId];
-      render(latestRunList);
-      const nextHandle = document.querySelector('.log-resize[data-run="' + runId + '"]');
-      if (nextHandle) nextHandle.focus();
     });
 
     document.getElementById('app').addEventListener('click', (event) => {
