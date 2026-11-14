@@ -2,11 +2,7 @@
 // Completion is intentionally conservative: tasks done + a current validation
 // GO. Nothing in the UI should invent a different completion rule.
 import { PHASE_META } from './phases';
-import {
-  specContentUpdatedAt,
-  type SpecRecord,
-  type ValidationFile,
-} from './repository';
+import { specContentUpdatedAt, type SpecRecord, type ValidationFile } from './repository';
 import {
   PHASES,
   nextStepState,
@@ -18,22 +14,10 @@ import {
 import { parseTasks, type ParsedTask } from './tasks';
 
 export type SpecStage =
-  | 'requirements'
-  | 'design'
-  | 'tasks'
-  | 'implementation'
-  | 'verification'
-  | 'done'
-  | 'unknown';
+  'requirements' | 'design' | 'tasks' | 'implementation' | 'verification' | 'done' | 'unknown';
 
 export type VerificationStatus =
-  | 'none'
-  | 'stale'
-  | 'verified'
-  | 'failed'
-  | 'manual'
-  | 'unconfirmed'
-  | 'error';
+  'none' | 'stale' | 'verified' | 'failed' | 'manual' | 'unconfirmed' | 'error';
 
 export type VerificationDecision = 'GO' | 'NO-GO' | 'MANUAL_VERIFY_REQUIRED';
 
@@ -46,6 +30,7 @@ export interface VerificationItem {
 }
 
 export interface Verification {
+  reportMissing?: boolean;
   status: VerificationStatus;
   decision?: VerificationDecision;
   at?: number;
@@ -55,13 +40,7 @@ export interface Verification {
   conditionsDefined: boolean;
 }
 
-export type SpecNextKind =
-  | 'missing'
-  | 'generate'
-  | 'review'
-  | 'implement'
-  | 'verify'
-  | 'done';
+export type SpecNextKind = 'missing' | 'generate' | 'review' | 'implement' | 'verify' | 'done';
 
 export interface SpecNextAction {
   kind: SpecNextKind;
@@ -85,8 +64,7 @@ export interface SpecProgress {
   next: SpecNextAction;
 }
 
-const DECISION_RE =
-  /^\s*[-*]?\s*DECISION:\s*[*`]*(GO|NO-GO|MANUAL_VERIFY_REQUIRED)[*`]*\s*$/im;
+const DECISION_RE = /^\s*[-*]?\s*DECISION:\s*[*`]*(GO|NO-GO|MANUAL_VERIFY_REQUIRED)[*`]*\s*$/im;
 
 const ITEM_RE = /^\s*[-*]\s+([^:]+):\s*(.+?)\s*$/;
 
@@ -119,9 +97,7 @@ export const verificationLabel = (verification: Verification): string => {
   }
 };
 
-export const parseDecision = (
-  content: string | undefined,
-): VerificationDecision | undefined => {
+export const parseDecision = (content: string | undefined): VerificationDecision | undefined => {
   if (!content) {
     return undefined;
   }
@@ -174,6 +150,18 @@ export const verificationFrom = (
   validation: ValidationFile | undefined,
 ): Verification => {
   if (!record.validationExists) {
+    const recorded = record.spec?.validation;
+    if (recorded && typeof recorded === 'object' && !Array.isArray(recorded)) {
+      return {
+        status: 'unconfirmed',
+        reportMissing: true,
+        path: record.validationPath,
+        detail:
+          'Verification metadata exists in spec.json, but impl-validation.md was not saved. Revalidate to persist the evidence report.',
+        items: [],
+        conditionsDefined: false,
+      };
+    }
     return {
       status: 'none',
       path: record.validationPath,
@@ -250,10 +238,7 @@ const stageFor = (step: NextStepState, verification: Verification): SpecStage =>
   }
 };
 
-const nextAction = (
-  step: NextStepState,
-  verification: Verification,
-): SpecNextAction => {
+const nextAction = (step: NextStepState, verification: Verification): SpecNextAction => {
   if (step.kind === 'missing') {
     return { kind: 'missing', label: 'Spec metadata missing' };
   }
@@ -279,6 +264,7 @@ const nextAction = (
     return { kind: 'implement', label: 'Start implementation' };
   }
 
+  if (verification.reportMissing) return { kind: 'verify', label: 'Revalidate' };
   if (verification.status === 'verified') {
     return { kind: 'done', label: 'View verification result' };
   }

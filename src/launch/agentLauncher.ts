@@ -1,8 +1,5 @@
 import * as vscode from 'vscode';
-import {
-  buildInvocation,
-  type AgentConfig,
-} from '../core/invocation';
+import { buildInvocation, type AgentConfig } from '../core/invocation';
 
 export type { AgentConfig, AgentKind, Invocation } from '../core/invocation';
 
@@ -16,6 +13,7 @@ export interface RunSkillOptions {
   consoleLauncher?: (prompt: string, meta: ConsoleLaunchMeta) => Promise<void>;
   /** Extra arguments appended after the feature (for example task IDs). */
   args?: string;
+  validationReportPath?: string;
 }
 
 const openCopilotChat = async (prompt: string): Promise<void> => {
@@ -53,9 +51,7 @@ const sendToClaudeVscodePanel = async (prompt: string): Promise<void> => {
 const openClaudeVscodeViaUri = async (prompt: string): Promise<void> => {
   try {
     await vscode.env.openExternal(
-      vscode.Uri.parse(
-        `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`,
-      ),
+      vscode.Uri.parse(`vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`),
     );
   } catch {
     await vscode.env.clipboard.writeText(prompt);
@@ -72,7 +68,13 @@ export const runSkill = async (
   skill: string,
   options: RunSkillOptions = {},
 ): Promise<void> => {
-  const invocation = buildInvocation(config, skill, feature, options.args);
+  const invocation = buildInvocation(
+    config,
+    skill,
+    feature,
+    options.args,
+    options.validationReportPath,
+  );
 
   if (config.agent === 'copilot') {
     await openCopilotChat(invocation.prompt);
@@ -109,11 +111,7 @@ export const runSkill = async (
   terminal.sendText(invocation.command, true);
 };
 
-export const runInstall = (
-  workspaceRoot: string,
-  args: string,
-  language: string,
-): void => {
+export const runInstall = (workspaceRoot: string, args: string, language: string): void => {
   const command = `npx cc-sdd@latest ${args}${language ? ` --lang ${language}` : ''}`.trim();
   const terminal = vscode.window.createTerminal({
     name: 'cc-sdd install',

@@ -1,0 +1,650 @@
+:root {
+  color-scheme: light dark;
+  --fg: var(--vscode-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --line: var(--vscode-tree-indentGuidesStroke, #737373);
+  --accent: var(--fg);
+  --success: var(--fg);
+  --warning: var(--fg);
+  --error: var(--fg);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding: 4px 12px 16px;
+  color: var(--fg);
+  background: var(--vscode-sideBar-background);
+  font: var(--vscode-font-size, 13px)/1.5 var(--vscode-font-family);
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 4px 0;
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+button:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+button:focus-visible,
+summary:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
+}
+small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workspace-row small {
+  flex: 1;
+}
+.spec {
+  border-top: 1px solid var(--vscode-panel-border, var(--line));
+  margin-top: 8px;
+  padding-top: 4px;
+}
+summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.spec-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.spec > summary > small {
+  padding-left: 16px;
+}
+.spec-body {
+  padding: 0 0 0 4px;
+}
+.spec-tools,
+.actions {
+  display: flex;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+}
+.secondary {
+  font-size: 11px;
+  color: var(--muted);
+}
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.progress-label span {
+  font-variant-numeric: tabular-nums;
+}
+progress {
+  display: block;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  margin: 4px 0 8px;
+  background: var(--muted);
+}
+progress::-webkit-progress-bar {
+  background: var(--vscode-editorWidget-background);
+}
+progress::-webkit-progress-value {
+  background: var(--accent);
+}
+ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.next {
+  padding: 0 0 8px;
+}
+.next button {
+  color: var(--accent);
+}
+.stage {
+  position: relative;
+  padding: 0 0 8px 24px;
+  min-height: 44px;
+  --state: var(--muted);
+}
+.stage::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: -8px;
+  left: 7px;
+  width: 1px;
+  background: var(--line);
+}
+.stage:last-child::before {
+  display: none;
+}
+.dot {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--vscode-sideBar-background);
+  border: 2px solid var(--state);
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--state);
+}
+.done {
+  --state: var(--success);
+}
+.current,
+.running {
+  --state: var(--accent);
+}
+.waiting {
+  --state: var(--warning);
+}
+.error {
+  --state: var(--error);
+}
+.running .dot,
+.current .dot {
+  background: var(--state);
+  box-shadow: inset 0 0 0 3px var(--vscode-sideBar-background);
+}
+.stage-title {
+  font-weight: 500;
+}
+.stage[aria-current] .stage-title {
+  font-weight: 600;
+}
+.stage-content {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: baseline;
+}
+.history {
+  margin: 4px 0 8px 24px;
+}
+.history summary {
+  color: var(--muted);
+  font-size: 11px;
+}
+.event {
+  position: relative;
+  padding: 4px 0 12px 16px;
+  border-left: 1px solid var(--line);
+}
+.event::before {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  top: 12px;
+  left: -4px;
+  background: var(--muted);
+}
+.event.running::before {
+  background: var(--accent);
+}
+.event.waiting::before {
+  background: var(--warning);
+}
+.event.error::before {
+  background: var(--error);
+}
+time {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.empty,
+.notice {
+  padding: 16px 0;
+  color: var(--muted);
+}
+#error {
+  color: var(--error);
+  white-space: pre-wrap;
+}
+@media (forced-colors: active) {
+  .dot {
+    border-color: CanvasText;
+  }
+  button {
+    color: LinkText;
+  }
+}
+
+.next small {
+  display: inline;
+  margin-left: 8px;
+}
+
+.stage-content {
+  display: block;
+}
+.stage-content > summary {
+  list-style: none;
+  padding: 0;
+}
+.stage-content > summary::-webkit-details-marker {
+  display: none;
+}
+.stage-title {
+  display: block;
+}
+.stage-status {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 16px;
+}
+.stage.running .stage-status,
+.stage.current .stage-status {
+  color: var(--accent);
+}
+.stage.done .stage-status {
+  color: var(--success);
+}
+.stage.waiting .stage-status {
+  color: var(--warning);
+}
+.stage.error .stage-status {
+  color: var(--error);
+}
+.stage-content > summary:hover .stage-title {
+  color: var(--accent);
+}
+.stage-detail {
+  padding-top: 4px;
+}
+.stage-detail .actions {
+  gap: 4px 12px;
+}
+.actions button {
+  padding: 0;
+}
+.stage:last-child {
+  min-height: 36px;
+  padding-bottom: 0;
+}
+.activity {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.spec-options {
+  margin: 4px 0 0 24px;
+}
+.spec-options > summary {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Stage percentages use the same task counts as the native Tasks view. */
+.stage-content > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  column-gap: 8px;
+  align-items: center;
+}
+.stage-title {
+  grid-column: 1;
+  grid-row: 1;
+}
+.stage-status {
+  grid-column: 1;
+  grid-row: 2;
+}
+.stage-progress {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.stage-progress progress {
+  width: 32px;
+  height: 3px;
+  margin: 0;
+  flex: 1;
+}
+.stage-progress progress::-webkit-progress-value {
+  background: var(--state);
+}
+.stage-progress > span {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.spec[data-active='true'] > summary .spec-name {
+  color: var(--accent);
+}
+
+/* One compact row per stage; extra controls are revealed on demand. */
+.spec > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+}
+.spec > summary::before {
+  content: '▸';
+  color: var(--muted);
+}
+.spec[open] > summary::before {
+  content: '▾';
+}
+.spec > summary::-webkit-details-marker {
+  display: none;
+}
+.spec > summary > small {
+  padding-left: 0;
+  font-size: 10px;
+}
+.spec-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spec {
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.stage,
+.stage:last-child {
+  min-height: 28px;
+  padding: 0 0 4px 20px;
+}
+.stage-content > summary {
+  grid-template-columns: minmax(96px, 1.2fr) minmax(0, 1fr) 80px;
+  column-gap: 8px;
+  min-height: 24px;
+}
+.stage-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-status {
+  grid-column: 2;
+  grid-row: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-progress {
+  grid-column: 3;
+  grid-row: 1;
+}
+.dot {
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  top: 6px;
+  font-size: 8px;
+}
+.stage::before {
+  top: 12px;
+  bottom: -12px;
+}
+.next {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+}
+.next button {
+  padding: 0;
+  font-size: 12px;
+}
+.next small {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.history,
+.spec-options {
+  margin: 0 0 0 20px;
+}
+.stage-detail {
+  padding-bottom: 4px;
+}
+@media (max-width: 280px) {
+  .stage-content > summary {
+    grid-template-columns: minmax(72px, 1fr) minmax(0, 0.7fr) 44px;
+    column-gap: 4px;
+  }
+  .stage-progress progress {
+    display: none;
+  }
+}
+
+/* Tasks shares the compact monochrome sidebar vocabulary. */
+.task-heading {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0 8px;
+}
+.task-heading strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.task-group {
+  border-top: 1px solid var(--vscode-panel-border, var(--line));
+}
+.task-group > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  font-size: 12px;
+}
+.task-group > summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-group > summary::before {
+  content: none;
+}
+.task-group > summary::-webkit-details-marker {
+  display: none;
+}
+.task-group-body {
+  padding: 0 0 4px 4px;
+}
+.task-row > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12px;
+  list-style: none;
+}
+.task-row > summary::-webkit-details-marker {
+  display: none;
+}
+.task-marker {
+  width: 12px;
+  flex: none;
+  color: var(--muted);
+}
+.task-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-row > summary small {
+  flex: none;
+  font-size: 10px;
+}
+.task-detail {
+  padding: 0 0 8px 20px;
+}
+.task-detail .actions {
+  gap: 4px 12px;
+}
+.task-children {
+  border-left: 1px solid var(--line);
+  padding-left: 8px;
+  margin-top: 4px;
+}
+.task-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 0;
+}
+.task-group .stage-progress {
+  min-width: 80px;
+  --state: var(--fg);
+}
+.task-group > summary > span:first-child::before {
+  content: '▸';
+  color: var(--muted);
+  margin-right: 4px;
+}
+.task-group[open] > summary > span:first-child::before {
+  content: '▾';
+}
+.implementation-tasks {
+  margin-top: 4px;
+}
+.implementation-tasks .task-row > summary {
+  min-height: 24px;
+}
+.implementation-tasks .task-group > summary {
+  min-height: 24px;
+}
+
+/* Session history uses the same text, spacing and neutral graph as Specs. */
+.session-scope {
+  padding: 0 0 4px;
+}
+.session-section h2 {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.session-section h2 small {
+  font-weight: 400;
+}
+.session-event {
+  position: relative;
+  padding: 0 0 8px 20px;
+}
+.session-event::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 10px;
+  bottom: -10px;
+  width: 1px;
+  background: var(--line);
+}
+.session-event:last-child::before {
+  display: none;
+}
+.session-event::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+  background: var(--vscode-sideBar-background);
+}
+.session-active::after {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+.session-event summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0 8px;
+  padding: 0;
+  min-height: 36px;
+  list-style: none;
+}
+.session-event summary::-webkit-details-marker {
+  display: none;
+}
+.session-event time {
+  font-size: 10px;
+  line-height: 18px;
+}
+.session-stage {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.session-stage small {
+  display: inline;
+  font-size: 10px;
+}
+.session-state {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.session-excerpt {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-detail {
+  padding: 4px 0;
+}
+.session-detail p {
+  font-size: 11px;
+  margin: 4px 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

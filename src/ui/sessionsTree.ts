@@ -12,7 +12,7 @@ const SKILL_STAGES: Record<string, string> = {
   'kiro-impl': 'Implementation',
   'kiro-spec-requirements': 'Requirements',
   'kiro-spec-design': 'Design',
-  'kiro-spec-tasks': 'Tasks',
+  'kiro-spec-tasks': 'Task planning',
   'kiro-steering': 'Steering',
   'kiro-discovery': 'Discovery',
   'kiro-spec-init': 'Spec init',

@@ -69,3 +69,34 @@ describe('buildInvocation', () => {
     expect(invocation.command).toBe('claude "/kiro-impl a\\"b\\$c"');
   });
 });
+
+describe('verification report contract', () => {
+  it.each([
+    'claude',
+    'claude-vscode',
+    'claude-console',
+    'codex',
+    'copilot',
+    'opencode',
+    'clipboard',
+  ] as const)('includes report persistence instructions for %s', (agent) => {
+    const invocation = buildInvocation(config(agent), 'kiro-validate-impl', 'add-readme');
+    expect(invocation.prompt).toContain('.kiro/specs/add-readme/impl-validation.md');
+    expect(invocation.prompt).toContain('DECISION: GO');
+    expect(invocation.prompt).toContain('DECISION: NO-GO');
+    expect(invocation.prompt).toContain('DECISION: MANUAL_VERIFY_REQUIRED');
+    expect(invocation.prompt).toContain('report last');
+    expect(invocation.prompt).toContain('do not claim completion');
+  });
+  it('honors a custom spec directory and quotes the full terminal prompt', () => {
+    const invocation = buildInvocation(
+      config('claude'),
+      'kiro-validate-impl',
+      'demo',
+      '',
+      '/work/specs elsewhere/demo/impl-validation.md',
+    );
+    expect(invocation.prompt).toContain('"/work/specs elsewhere/demo/impl-validation.md"');
+    expect(invocation.command).toContain('\\"/work/specs elsewhere/demo/impl-validation.md\\"');
+  });
+});

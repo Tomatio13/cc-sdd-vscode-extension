@@ -38,9 +38,11 @@ import {
   type AgentKind,
 } from './launch/agentLauncher';
 import { SpecTreeProvider, type SpecSort } from './ui/specTree';
+import { SpecTimeline } from './ui/specTimeline';
 import { StatusBar } from './ui/statusBar';
 import { RunsStatusBar } from './ui/runsStatusBar';
 import { TaskTreeProvider } from './ui/taskTree';
+import { SessionsTimeline } from './ui/sessionsTimeline';
 import { SessionsTreeProvider } from './ui/sessionsTree';
 import { RunsConsole, type PhaseActions } from './ui/runsConsole';
 import { OverviewPanel } from './ui/overviewPanel';
@@ -292,11 +294,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     activeSpecId = record.id;
-    await context.workspaceState.update('ccSdd.activeSpec', activeSpecId);
     specProvider.setActive(record.id);
     taskProvider.setActive(record);
     sessionsProvider.setActive(record);
-    statusBar.update(record, await progressFor(record));
+    await context.workspaceState.update('ccSdd.activeSpec', record.id);
+    const progress = await progressFor(record);
+    if (activeSpecId === record.id) statusBar.update(record, progress);
   };
 
   const runPhase = async (record: SpecRecord, phase: PhaseKey): Promise<void> => {
@@ -495,7 +498,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     await selectSpec(record);
-    await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL, runSkillOptions);
+    await runSkill(agentConfig(), root, record.id, VALIDATE_IMPL_SKILL, {
+      ...runSkillOptions,
+      validationReportPath: record.validationPath,
+    });
   };
 
   const runTask = async (record: SpecRecord, task: ParsedTask): Promise<void> => {
@@ -538,6 +544,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const runWithSkill = async (skill: string, feature = ''): Promise<void> => {
+    if (skill === VALIDATE_IMPL_SKILL && feature) {
+      const record = (await loadSpecs()).find((item) => item.id === feature);
+      if (record) {
+        await runValidateImpl(record);
+        return;
+      }
+    }
     const root = workspaceRoot();
     if (!root) {
       void vscode.window.showErrorMessage('cc-sdd: open a workspace first.');
@@ -934,6 +947,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runsConsole.onDidChange(() => {
       runsStatusBar.update(runsConsole.getRuns());
       overviewPanel?.scheduleRefresh();
+      specProvider.refresh();
+      taskProvider.refresh();
+      sessionsProvider.refresh();
     }),
   );
 
@@ -1053,10 +1069,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showTextDocument(document, { preview: true });
   };
 
+  const specTimeline = new SpecTimeline(
+    context.extensionUri,
+    specProvider,
+    () => runsConsole.getRuns(),
+    (id) => runsConsole.openRun(id),
+    taskProvider,
+  );
+  const sessionsTimeline = new SessionsTimeline(context.extensionUri, sessionsProvider);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('ccSdd.specs', specProvider),
-    vscode.window.registerTreeDataProvider('ccSdd.tasks', taskProvider),
-    vscode.window.registerTreeDataProvider('ccSdd.sessions', sessionsProvider),
+    specTimeline,
+    sessionsTimeline,
+    vscode.window.registerWebviewViewProvider('ccSdd.specs', specTimeline),
+    vscode.window.registerWebviewViewProvider('ccSdd.sessions', sessionsTimeline),
     statusBar,
     runsStatusBar,
     register('ccSdd.refresh', refresh),

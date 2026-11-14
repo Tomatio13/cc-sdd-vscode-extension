@@ -8,6 +8,10 @@ A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It re
 - **Approval gates** — validate artifacts before recording approvals. Missing sections and unresolved placeholders block approval.
 - **Phase launcher** — run cc-sdd phases in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 
+Specs uses a theme-aware sidebar timeline with connected stage markers, implementation task progress, approval/run actions, and the five most recent runs in this window. Implementation tasks are embedded under each spec’s Implementation stage, with completed tasks folded away. The standalone Tasks view has been removed; Sessions uses the same monochrome timeline style: active sessions first, then history ordered by last activity, with details and resume actions on expansion. Expansion and reading position are preserved on refresh.
+
+Verification launches explicitly request an `impl-validation.md` evidence report with a `DECISION` line. A `spec.json` validation field alone remains unconfirmed and offers revalidation; a finished run alone does not mark a spec complete.
+
 ## Requirements
 
 - VS Code 1.90 or higher

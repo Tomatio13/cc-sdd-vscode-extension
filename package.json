@@ -43,15 +43,13 @@
       "ccSdd": [
         {
           "id": "ccSdd.specs",
-          "name": "Specs"
-        },
-        {
-          "id": "ccSdd.tasks",
-          "name": "Tasks"
+          "name": "Specs",
+          "type": "webview"
         },
         {
           "id": "ccSdd.sessions",
-          "name": "Sessions"
+          "name": "Sessions",
+          "type": "webview"
         }
       ]
     },
@@ -59,10 +57,6 @@
       {
         "view": "ccSdd.specs",
         "contents": "No cc-sdd specs found.\n[Create a spec](command:ccSdd.newSpec)\n[Install cc-sdd](command:ccSdd.install)\n[Refresh](command:ccSdd.refresh)"
-      },
-      {
-        "view": "ccSdd.tasks",
-        "contents": "Select a spec in the Specs view to see its tasks."
       },
       {
         "view": "ccSdd.sessions",
@@ -232,7 +226,7 @@
       "view/title": [
         {
           "command": "ccSdd.overview",
-          "when": "view == ccSdd.specs || view == ccSdd.tasks || view == ccSdd.sessions",
+          "when": "view == ccSdd.specs || view == ccSdd.sessions",
           "group": "navigation@0"
         },
         {
@@ -252,7 +246,7 @@
         },
         {
           "command": "ccSdd.refresh",
-          "when": "view == ccSdd.specs || view == ccSdd.tasks",
+          "when": "view == ccSdd.specs",
           "group": "navigation@4"
         },
         {
@@ -341,31 +335,6 @@
           "command": "ccSdd.revokePhase",
           "when": "view == ccSdd.specs && viewItem == phase-approved",
           "group": "inline@3"
-        },
-        {
-          "command": "ccSdd.openTask",
-          "when": "view == ccSdd.tasks && viewItem =~ /^task/",
-          "group": "navigation@1"
-        },
-        {
-          "command": "ccSdd.toggleTask",
-          "when": "view == ccSdd.tasks && viewItem =~ /^task/",
-          "group": "inline@1"
-        },
-        {
-          "command": "ccSdd.runTask",
-          "when": "view == ccSdd.tasks && viewItem == task-todo",
-          "group": "inline@2"
-        },
-        {
-          "command": "ccSdd.runFromTask",
-          "when": "view == ccSdd.tasks && viewItem == task-todo",
-          "group": "inline@3"
-        },
-        {
-          "command": "ccSdd.openSpecRun",
-          "when": "view == ccSdd.tasks && viewItem == task-running",
-          "group": "inline@2"
         },
         {
           "command": "ccSdd.resumeSession",

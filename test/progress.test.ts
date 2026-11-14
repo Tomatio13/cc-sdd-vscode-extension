@@ -106,11 +106,7 @@ describe('buildSpecProgress', () => {
   });
 
   it('does not treat a checked verification task as validation success', () => {
-    const progress = buildSpecProgress(
-      approved(),
-      tasks(1, 1, 'Verify integration'),
-      undefined,
-    );
+    const progress = buildSpecProgress(approved(), tasks(1, 1, 'Verify integration'), undefined);
 
     expect(progress.tasksDone).toBe(1);
     expect(progress.completed).toBe(false);
@@ -135,5 +131,18 @@ describe('buildSpecProgress', () => {
     expect(progress.stage).toBe('design');
     expect(progress.stateLabel).toBe('Review pending: Design');
     expect(progress.next).toMatchObject({ kind: 'review', phase: 'design', label: 'Open design' });
+  });
+});
+
+describe('verification report persistence', () => {
+  it('does not promote spec.json GO metadata to verified without an evidence report', () => {
+    const item = approved();
+    item.spec!.validation = { decision: 'GO', tests: 'PASS' };
+    const progress = buildSpecProgress(item, tasks(2, 2), {});
+    expect(progress.verification.status).toBe('unconfirmed');
+    expect(progress.verification.reportMissing).toBe(true);
+    expect(progress.verification.detail).toContain('impl-validation.md was not saved');
+    expect(progress.completed).toBe(false);
+    expect(progress.next.label).toBe('Revalidate');
   });
 });

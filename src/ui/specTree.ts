@@ -1,9 +1,5 @@
 import * as vscode from 'vscode';
-import {
-  IMPLEMENTATION_SKILL,
-  PHASE_META,
-  VALIDATE_IMPL_SKILL,
-} from '../core/phases';
+import { IMPLEMENTATION_SKILL, PHASE_META, VALIDATE_IMPL_SKILL } from '../core/phases';
 import {
   buildSpecProgress,
   verificationLabel,
@@ -19,11 +15,7 @@ import {
 } from '../core/repository';
 import { PHASES, type PhaseKey, type PhaseStatus } from '../core/spec';
 import type { RunState } from '../run/claudeRunner';
-import {
-  countLabel,
-  phaseStateIcon,
-  phaseStateLabel,
-} from './treeState';
+import { countLabel, phaseStateIcon, phaseStateLabel } from './treeState';
 
 type StageKey = PhaseKey | 'implementation' | 'verification';
 
@@ -70,11 +62,7 @@ const compareNewest = (left: SpecRecord, right: SpecRecord): number => {
   return left.id.localeCompare(right.id);
 };
 
-const compareRoadmap = (
-  roadmap: RoadmapInfo,
-  left: SpecRecord,
-  right: SpecRecord,
-): number => {
+const compareRoadmap = (roadmap: RoadmapInfo, left: SpecRecord, right: SpecRecord): number => {
   const leftIndex = roadmap.order.indexOf(left.id);
   const rightIndex = roadmap.order.indexOf(right.id);
   if (leftIndex === -1 && rightIndex === -1) {
@@ -97,9 +85,7 @@ const runsForSpec = (record: SpecRecord, runs: RunState[]): SpecRunInfo => {
     .filter((run) => run.feature === record.id && run.status !== 'preview')
     .sort((left, right) => right.startedAt - left.startedAt);
   const pending = matching.filter((run) => run.pending !== undefined);
-  const running = matching.filter(
-    (run) => run.status === 'running' && run.pending === undefined,
-  );
+  const running = matching.filter((run) => run.status === 'running' && run.pending === undefined);
   const latest = [...matching].sort(
     (left, right) => (right.endedAt ?? right.startedAt) - (left.endedAt ?? left.startedAt),
   )[0];
@@ -115,8 +101,7 @@ const runsForSpec = (record: SpecRecord, runs: RunState[]): SpecRunInfo => {
 
 const activeRunOf = (runs: SpecRunInfo, skill: string): RunState | undefined =>
   runs.all.find(
-    (run) =>
-      run.skill === skill && (run.pending !== undefined || run.status === 'running'),
+    (run) => run.skill === skill && (run.pending !== undefined || run.status === 'running'),
   );
 
 const allApproved = (progress: SpecProgress): boolean =>
@@ -157,9 +142,9 @@ const nextActionItem = (
       label: `Next: ${next.label}`,
       detail: next.detail,
       icon: 'eye',
-      tooltip: `Open ${meta.file}, then approve it from the check button on step ${PHASES.indexOf(
-        next.phase,
-      ) + 1}.`,
+      tooltip: `Open ${meta.file}, then approve it from the check button on step ${
+        PHASES.indexOf(next.phase) + 1
+      }.`,
       command: {
         command: 'ccSdd.openArtifact',
         title: 'Open Artifact',
@@ -292,17 +277,17 @@ const specIcon = (
   if (progress.reviewPhases.length > 0) {
     return new vscode.ThemeIcon('clock');
   }
-  if (progress.stage === 'requirements' || progress.stage === 'design' || progress.stage === 'tasks') {
+  if (
+    progress.stage === 'requirements' ||
+    progress.stage === 'design' ||
+    progress.stage === 'tasks'
+  ) {
     return new vscode.ThemeIcon('circle-outline');
   }
   return new vscode.ThemeIcon('warning');
 };
 
-const specDescription = (
-  active: boolean,
-  progress: SpecProgress,
-  runs: SpecRunInfo,
-): string => {
+const specDescription = (active: boolean, progress: SpecProgress, runs: SpecRunInfo): string => {
   const parts: string[] = [];
   if (active) {
     parts.push('active');
@@ -372,9 +357,7 @@ const specItem = (
       return `${mark} ${PHASE_META[phase].label}`;
     }).join('  ')}\n\n`,
   );
-  tooltip.appendMarkdown(
-    `Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks\n\n`,
-  );
+  tooltip.appendMarkdown(`Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks\n\n`);
   tooltip.appendMarkdown(`Verification: ${verificationLabel(progress.verification)}\n\n`);
   if (progress.verification.detail) {
     tooltip.appendMarkdown(`${progress.verification.detail}\n\n`);
@@ -406,10 +389,7 @@ const phaseStageItem = (
   const item = new vscode.TreeItem(`${order}. ${meta.label}`, vscode.TreeItemCollapsibleState.None);
   item.id = `stage:${record.id}:${phase}`;
   item.contextValue = `phase-${status}`;
-  item.description =
-    phase === 'tasks' && progress.tasksTotal > 0
-      ? `${progress.tasksDone}/${progress.tasksTotal} done`
-      : phaseStateLabel(status);
+  item.description = phaseStateLabel(status);
   item.iconPath = phaseIcon(status, current);
 
   const details = [
@@ -418,9 +398,6 @@ const phaseStageItem = (
     record.artifacts[phase],
     `Skill: /${meta.skill}`,
   ];
-  if (phase === 'tasks' && progress.tasksTotal > 0) {
-    details.push(`Progress: ${progress.tasksDone}/${progress.tasksTotal} done`);
-  }
   item.tooltip = details.join('\n\n');
   item.command =
     status === 'missing'
@@ -520,9 +497,7 @@ const verificationStatusDescription = (verification: Verification): string => {
   }
 };
 
-const verificationStageItem = (
-  node: Extract<SpecTreeNode, { kind: 'stage' }>,
-): vscode.TreeItem => {
+const verificationStageItem = (node: Extract<SpecTreeNode, { kind: 'stage' }>): vscode.TreeItem => {
   const { record, progress, current } = node;
   const verification = progress.verification;
   const item = new vscode.TreeItem('5. Verification', vscode.TreeItemCollapsibleState.None);
@@ -536,7 +511,13 @@ const verificationStageItem = (
     return item;
   }
 
-  item.description = verificationStatusDescription(verification);
+  const lastValidationRun = node.runs.all.find((run) => run.skill === VALIDATE_IMPL_SKILL);
+  const reportMissing =
+    verification.reportMissing ||
+    (!record.validationExists && lastValidationRun?.status === 'done');
+  item.description = reportMissing
+    ? 'report not saved · revalidate'
+    : verificationStatusDescription(verification);
   item.contextValue = `verification-${verification.status}`;
 
   const validationRun = activeRunOf(node.runs, VALIDATE_IMPL_SKILL);
@@ -606,7 +587,9 @@ const verificationStageItem = (
   }
   if (verification.items.length > 0) {
     details.push(
-      ['Checks:', ...verification.items.map((check) => `- ${check.label}: ${check.value}`)].join('\n'),
+      ['Checks:', ...verification.items.map((check) => `- ${check.label}: ${check.value}`)].join(
+        '\n',
+      ),
     );
   } else {
     details.push('No itemized verification checks recorded.');
@@ -751,7 +734,11 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
   getTreeItem(node: SpecTreeNode): vscode.TreeItem {
     switch (node.kind) {
       case 'spec':
-        return specItem(node, this.activeId === node.record.id, runsForSpec(node.record, this.getRuns()));
+        return specItem(
+          node,
+          this.activeId === node.record.id,
+          runsForSpec(node.record, this.getRuns()),
+        );
       case 'steering':
         return steeringItem(node.status);
       case 'roadmap':
@@ -766,7 +753,8 @@ export class SpecTreeProvider implements vscode.TreeDataProvider<SpecTreeNode> {
         if (node.command) {
           item.command = node.command;
         }
-        item.tooltip = node.tooltip ?? (node.detail ? `${node.label}\n\n${node.detail}` : node.label);
+        item.tooltip =
+          node.tooltip ?? (node.detail ? `${node.label}\n\n${node.detail}` : node.label);
         return item;
       }
       case 'stage':

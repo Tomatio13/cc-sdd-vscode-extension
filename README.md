@@ -6,9 +6,9 @@ English | <a href="./README_ja.md">日本語</a>
 
 A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** portfolio for spec progress.
 
-![cc-sdd Specs workbench: Specs, Tasks, and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview portfolio on the right](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview portfolio on the right](./assets/workbench.png)
 
-The workbench is built around three sidebar trees and two panels:
+The workbench is built around a Specs sidebar with embedded implementation tasks and a Sessions history timeline and two panels:
 
 - **Specs, Tasks, Sessions** — the sidebar selects one spec, shows its Requirements → Design → Tasks → Implementation → Verification pipeline, and keeps task execution and session resume in the matching views.
 - **Runs** — streams tool calls, markdown output, and progress in one panel. Permission prompts and `AskUserQuestion` appear as buttons there.
@@ -16,20 +16,24 @@ The workbench is built around three sidebar trees and two panels:
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
+Specs uses a theme-aware sidebar timeline with connected stage markers, implementation task progress, approval/run actions, and the five most recent runs in this window. Implementation tasks are embedded under each spec’s Implementation stage, with completed tasks folded away. The standalone Tasks view has been removed; Sessions uses the same monochrome timeline style: active sessions first, then history ordered by last activity, with details and resume actions on expansion. Expansion and reading position are preserved on refresh.
+
 ## What it does
 
-- **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the spec tree shows Steering presence (click to generate; use the inline sync button to re-run it after the codebase changes) and roadmap.md order/dependencies when they exist.
+- **Full flow entry points** — `Run Discovery` starts `/kiro-discovery` (the correct entry for new work); the Specs timeline shows Steering presence (click to generate; use the Run button to re-run it after the codebase changes) and roadmap.md order/dependencies when they exist.
 - **Spec Explorer** — lists every `.kiro/specs/<feature>` as a numbered Requirements → Design → Tasks → Implementation → Verification pipeline, with one explicit next action. Implementation completion is separate from spec completion: a spec is complete only when a current `impl-validation.md` records `GO`. Newest specs come first by default; set `ccSdd.specSort` to `roadmap` to follow roadmap.md dependency order instead.
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 - **Overview portfolio** — a leader / PM view of repository spec progress. KPI filters for in-progress, blocked, review pending, verification pending, and done; an in-progress table that separates stage from run state; explicit block reasons and roadmap dependency candidates; recent updates; and a collapsed completed section. Verification is only claimed when `impl-validation.md` says `GO` for the current artifacts. Local runs stay in the Runs console and are labelled as this-window state.
-- **Task board** — the selected spec is always shown at the top. Implementation tasks are separated from a Verification section with recorded checks, status, and start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
+- **Task board** — each spec’s Implementation stage contains its own tasks. Verification remains a separate stage, with start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
 - **Sessions** — initially scoped to the selected spec, with a toggle for all specs. Active/waiting sessions are separated from history; each item shows spec, stage (including verification), state, and last activity. Resume is offered for history sessions and open-run for active sessions with a matching run.
 - **Run insights** — token usage (input / output / cache), per-turn metrics, permission denials, and a one-click trace export (`.kiro/runs/*.json`) for debugging.
 - **Status bar** — shows the active spec and the shared next action, plus a `N waiting · M running` signal while runs are active.
 - **Auto refresh** — watches the specs directory and reloads on changes.
 - **Installer** — runs `npx cc-sdd@latest` with the integration you pick.
 - **JSON Schema** — validates `.kiro/specs/*/spec.json` while you edit it.
+
+Verification launches explicitly request an `impl-validation.md` evidence report with a `DECISION` line. A `spec.json` validation field alone remains unconfirmed and offers revalidation; a finished run alone does not mark a spec complete.
 
 ## State model
 
@@ -59,15 +63,15 @@ The extension treats `spec.json` as the single source of truth and only writes a
 | --- | --- |
 | `cc-sdd: Refresh` | Reload specs and tasks. |
 | `cc-sdd: Run Discovery` | Describe the work and launch `/kiro-discovery` (the flow entry point). |
-| `cc-sdd: Run Steering` | Launch `/kiro-steering` (also offered from the Steering node when missing, and from its inline sync button to re-run it). |
-| `cc-sdd: Validate against Codebase (Gap)` | Launch `/kiro-validate-gap` for the active/selected spec (right-click a spec). |
-| `cc-sdd: Validate Design` | Launch `/kiro-validate-design` (right-click a spec). |
+| `cc-sdd: Run Steering` | Launch `/kiro-steering` (also offered from the Steering node when missing, and from its Run button to re-run it). |
+| `cc-sdd: Validate against Codebase (Gap)` | Launch `/kiro-validate-gap` for the active/selected spec (use the spec’s Gap check button). |
+| `cc-sdd: Validate Design` | Launch `/kiro-validate-design` (use the spec’s Design check button). |
 | `cc-sdd: New Spec` | Ask for a description and launch `/kiro-spec-init`. |
 | `cc-sdd: Install Skills` | Pick an agent integration and run `npx cc-sdd@latest`. |
-| `cc-sdd: Select Active Spec` | Choose which spec the Tasks view follows. |
+| `cc-sdd: Select Active Spec` | Choose the active spec and filter Sessions. |
 | `cc-sdd: Show Spec Status` | Open a Markdown summary of phases and approvals. |
-| `cc-sdd: Open Overview` | Open the leader / PM spec portfolio (also the dashboard icon in the Specs, Tasks, and Sessions title bars). |
-| Approve / Revoke Phase | Context actions on a phase node. |
+| `cc-sdd: Open Overview` | Open the leader / PM spec portfolio (also the dashboard icon in the Specs and Sessions title bars). |
+| Approve / Revoke Phase | Buttons beside each timeline stage. |
 | Run Phase | Context action on a missing/draft/generated phase. |
 | Run Implementation | Context action on a ready spec. |
 | Toggle Task | Flip a `tasks.md` checkbox from the tree. |

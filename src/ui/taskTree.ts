@@ -62,9 +62,7 @@ const activeRuns = (record: SpecRecord, runs: RunState[]): RunState[] =>
 
 const taskIdsFromRun = (run: RunState, knownIds: Set<string>): string[] => {
   const matches = run.prompt.match(/(?:^|\s)(\d+(?:\.\d+)*)(?=\s|$)/g) ?? [];
-  return matches
-    .map((match) => match.trim())
-    .filter((id) => knownIds.has(id));
+  return matches.map((match) => match.trim()).filter((id) => knownIds.has(id));
 };
 
 const runningTaskIds = (runs: RunState[], tasks: ParsedTask[]): Set<string> => {
@@ -129,9 +127,7 @@ const verificationIcon = (progress: SpecProgress): vscode.ThemeIcon => {
   }
 };
 
-const specHeaderItem = (
-  node: Extract<TaskTreeNode, { kind: 'header' }>,
-): vscode.TreeItem => {
+const specHeaderItem = (node: Extract<TaskTreeNode, { kind: 'header' }>): vscode.TreeItem => {
   const { record, progress } = node;
   const label = record.spec?.feature_name?.trim() || record.id;
   const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
@@ -143,9 +139,7 @@ const specHeaderItem = (
   tooltip.appendMarkdown(`**${label}**\n\n`);
   tooltip.appendMarkdown(`Stage: ${progress.stageLabel}\n\n`);
   tooltip.appendMarkdown(`State: ${progress.stateLabel}\n\n`);
-  tooltip.appendMarkdown(
-    `Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks\n\n`,
-  );
+  tooltip.appendMarkdown(`Implementation: ${progress.tasksDone}/${progress.tasksTotal} tasks\n\n`);
   tooltip.appendMarkdown(`Verification: ${verificationLabel(progress.verification)}\n\n`);
   tooltip.appendMarkdown(`Path: \`${record.dir}\``);
   item.tooltip = tooltip;
@@ -155,10 +149,7 @@ const specHeaderItem = (
 const groupItem = (node: Extract<TaskTreeNode, { kind: 'group' }>): vscode.TreeItem => {
   const { group, progress, tasks } = node;
   if (group === 'implementation') {
-    const item = new vscode.TreeItem(
-      'Implementation',
-      vscode.TreeItemCollapsibleState.Expanded,
-    );
+    const item = new vscode.TreeItem('Implementation', vscode.TreeItemCollapsibleState.Expanded);
     item.id = `tasks:${node.record.id}:implementation`;
     item.contextValue = 'task-group-implementation';
     item.description = `${progress.tasksDone}/${progress.tasksTotal}`;
@@ -173,10 +164,7 @@ const groupItem = (node: Extract<TaskTreeNode, { kind: 'group' }>): vscode.TreeI
   }
 
   if (group === 'completed') {
-    const item = new vscode.TreeItem(
-      'Completed tasks',
-      vscode.TreeItemCollapsibleState.Collapsed,
-    );
+    const item = new vscode.TreeItem('Completed tasks', vscode.TreeItemCollapsibleState.Collapsed);
     item.id = `tasks:${node.record.id}:completed`;
     item.contextValue = 'task-group-completed';
     item.description = `${tasks?.length ?? 0} task(s)`;
@@ -185,10 +173,7 @@ const groupItem = (node: Extract<TaskTreeNode, { kind: 'group' }>): vscode.TreeI
     return item;
   }
 
-  const item = new vscode.TreeItem(
-    'Verification',
-    vscode.TreeItemCollapsibleState.Expanded,
-  );
+  const item = new vscode.TreeItem('Verification', vscode.TreeItemCollapsibleState.Expanded);
   item.id = `tasks:${node.record.id}:verification`;
   item.contextValue = 'task-group-verification';
   item.description = !progress.implementationComplete
@@ -282,7 +267,9 @@ const taskItem = (node: Extract<TaskTreeNode, { kind: 'task' }>): vscode.TreeIte
   return item;
 };
 
-const verificationItem = (node: Extract<TaskTreeNode, { kind: 'verification' }>): vscode.TreeItem => {
+const verificationItem = (
+  node: Extract<TaskTreeNode, { kind: 'verification' }>,
+): vscode.TreeItem => {
   const { record, progress } = node;
   const verification = progress.verification;
   const label = !progress.implementationComplete
@@ -492,16 +479,13 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeNode> {
     return nodes;
   }
 
-  private toTaskNode(
+  toTaskNode(
     record: SpecRecord,
     progress: SpecProgress,
     task: ParsedTask,
   ): Extract<TaskTreeNode, { kind: 'task' }> {
     const allTasks = progress.tasks;
-    const running = runningTaskIds(
-      activeRuns(record, this.getRuns()),
-      allTasks,
-    );
+    const running = runningTaskIds(activeRuns(record, this.getRuns()), allTasks);
     const waiting = unresolvedDependencies(task, allTasks);
     const next = nextCandidate(allTasks) === task.id;
     const remaining = allTasks.filter((candidate) => !candidate.checked).length;
@@ -517,9 +501,7 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeNode> {
     };
   }
 
-  private verificationChildren(
-    group: Extract<TaskTreeNode, { kind: 'group' }>,
-  ): TaskTreeNode[] {
+  private verificationChildren(group: Extract<TaskTreeNode, { kind: 'group' }>): TaskTreeNode[] {
     const { record, progress } = group;
     const nodes: TaskTreeNode[] = [{ kind: 'verification', record, progress }];
 
