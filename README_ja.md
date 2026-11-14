@@ -6,7 +6,7 @@
 <a href="./README.md">English</a> | 日本語
 </sub></div>
 
-![cc-sdd Specs ワークベンチ: Specs / Tasks / Sessions のサイドバー、中央の cc-sdd Runs コンソール、右の cc-sdd Overview ポートフォリオ](./assets/workbench.png)
+![cc-sdd Specs ワークベンチ: Specs と Sessions のサイドバー、中央の Run 別タブ、右の進捗報告向け Overview](./assets/workbench.png)
 
 このワークベンチは、実装タスクを統合した Specs ビューと Sessions 履歴タイムライン、2つのパネルで構成されます。
 

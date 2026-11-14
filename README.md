@@ -6,7 +6,7 @@ English | <a href="./README_ja.md">日本語</a>
 
 A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** portfolio for spec progress.
 
-![cc-sdd Specs workbench: Specs and Sessions in the sidebar, the cc-sdd Runs console in the middle, and the cc-sdd Overview portfolio on the right](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs and Sessions in the sidebar, individual Run tabs in the middle, and the progress-reporting Overview on the right](./assets/workbench.png)
 
 The workbench is built around a Specs sidebar with embedded implementation tasks and a Sessions history timeline and two panels:
 
