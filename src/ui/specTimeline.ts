@@ -253,19 +253,13 @@ export class SpecTimeline implements vscode.WebviewViewProvider, vscode.Disposab
     if (/^verification-(none|failed|stale|manual|unconfirmed|error)$/.test(context) && !live)
       controls.push(action('Verify', 'ccSdd.runValidateImpl', node.record));
     const tooltip = typeof item.tooltip === 'string' ? item.tooltip : '';
-    const activity = live?.segments
-      ?.slice()
-      .reverse()
-      .find((segment) => (segment.kind === 'tool' || segment.kind === 'text') && segment.text);
-    const activityText = live?.pending?.summary ?? activity?.text;
-    const detail = activityText ? activityText.replace(/\s+/g, ' ').trim().slice(0, 180) : '';
     const open = Boolean(live);
     const primary = !live && item.command ? button('Open', item.command, 'secondary') : '';
     const tasksHtml =
       node.stage === 'implementation' && this.tasks
         ? renderImplementationTasks(node.record, node.progress, this.tasks, button)
         : '';
-    return `<li class="stage ${state}" ${node.current ? 'aria-current="step"' : ''}><span class="dot" aria-hidden="true">${state === 'done' ? '✓' : ''}</span><details class="stage-content" data-key="row:${escapeHtml(node.record.id)}:${node.stage}" ${open ? 'open' : ''}><summary title="${escapeHtml(tooltip)}"><span class="stage-title">${escapeHtml(label)}</span><small class="stage-status">${escapeHtml(description)}</small>${node.stage === 'tasks' ? '' : `<span class="stage-progress"><progress aria-label="${escapeHtml(label)} progress" value="${percentage}" max="100"></progress><span>${percentLabel(percentage)}</span></span>`}</summary><div class="stage-detail">${detail ? `<p class="activity" title="${escapeHtml(detail)}">${escapeHtml(detail)}</p>` : ''}<div class="actions">${primary}${controls.join('')}</div>${tasksHtml}</div></details></li>`;
+    return `<li class="stage ${state}" ${node.current ? 'aria-current="step"' : ''}><span class="dot" aria-hidden="true">${state === 'done' ? '✓' : ''}</span><details class="stage-content" data-key="row:${escapeHtml(node.record.id)}:${node.stage}" ${open ? 'open' : ''}><summary title="${escapeHtml(tooltip)}"><span class="stage-title">${escapeHtml(label)}</span><small class="stage-status">${escapeHtml(description)}</small>${node.stage === 'tasks' ? '' : `<span class="stage-progress"><progress aria-label="${escapeHtml(label)} progress" value="${percentage}" max="100"></progress><span>${percentLabel(percentage)}</span></span>`}</summary><div class="stage-detail"><div class="actions">${primary}${controls.join('')}</div>${tasksHtml}</div></details></li>`;
   }
 
   dispose(): void {

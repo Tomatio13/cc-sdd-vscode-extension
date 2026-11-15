@@ -101,9 +101,21 @@ export interface RunState {
 
 export type RunEvent =
   | { kind: 'system'; sessionId?: string; model?: string }
-  | { kind: 'assistant'; text?: string; tool?: { name: string; summary: string } }
-  | { kind: 'toolresult'; text: string; isError: boolean }
+  | {
+      kind: 'assistant';
+      text?: string;
+      tool?: {
+        name: string;
+        summary: string;
+        /** Raw input, read once to classify the call; it is never stored on the run. */
+        input?: Record<string, unknown>;
+        id?: string;
+        agentId?: string;
+      };
+    }
+  | { kind: 'toolresult'; text: string; isError: boolean; toolUseId?: string }
   | { kind: 'pending'; pending: PendingInteraction }
+  | { kind: 'context'; percent: number }
   | { kind: 'usage'; id?: string; model?: string; at?: number; usage: TokenUsage }
   | {
       kind: 'result';
@@ -214,6 +226,8 @@ export interface ClaudeMessage {
     content?: unknown;
     usage?: Record<string, unknown>;
   };
+  /** Non-null when the message was produced inside a subagent started by that tool call. */
+  parent_tool_use_id?: string | null;
   result?: unknown;
   total_cost_usd?: number;
   num_turns?: number;
@@ -312,13 +326,29 @@ export const eventsFromClaudeMessage = (parsed: unknown): RunEvent[] => {
           if (typeof block !== 'object' || block === null) {
             continue;
           }
-          const typed = block as { type?: unknown; text?: unknown; name?: unknown; input?: unknown };
+          const typed = block as {
+            type?: unknown;
+            text?: unknown;
+            name?: unknown;
+            input?: unknown;
+            id?: unknown;
+          };
           if (typed.type === 'text' && typeof typed.text === 'string' && typed.text.trim()) {
             events.push({ kind: 'assistant', text: typed.text });
           } else if (typed.type === 'tool_use' && typeof typed.name === 'string') {
             events.push({
               kind: 'assistant',
-              tool: { name: typed.name, summary: summarizeToolInput(typed.input) },
+              tool: {
+                name: typed.name,
+                summary: summarizeToolInput(typed.input),
+                ...(typeof typed.input === 'object' && typed.input !== null
+                  ? { input: typed.input as Record<string, unknown> }
+                  : {}),
+                ...(typeof typed.id === 'string' ? { id: typed.id } : {}),
+                ...(message.parent_tool_use_id
+                  ? { agentId: message.parent_tool_use_id }
+                  : {}),
+              },
             });
           }
         }
@@ -334,12 +364,20 @@ export const eventsFromClaudeMessage = (parsed: unknown): RunEvent[] => {
           if (typeof block !== 'object' || block === null) {
             continue;
           }
-          const typed = block as { type?: unknown; content?: unknown; is_error?: unknown };
+          const typed = block as {
+            type?: unknown;
+            content?: unknown;
+            is_error?: unknown;
+            tool_use_id?: unknown;
+          };
           if (typed.type === 'tool_result') {
             events.push({
               kind: 'toolresult',
               text: shorten(textFromContent(typed.content), TOOL_RESULT_LIMIT),
               isError: typed.is_error === true,
+              ...(typeof typed.tool_use_id === 'string'
+                ? { toolUseId: typed.tool_use_id }
+                : {}),
             });
           }
         }
@@ -420,6 +458,8 @@ export const describeRunEvent = (event: RunEvent): RunSegment[] => {
     case 'toolresult':
       return [{ kind: 'toolresult', text: event.text, isError: event.isError }];
     case 'pending':
+      return [];
+    case 'context':
       return [];
     case 'usage':
       return [];
@@ -657,6 +697,32 @@ export const startClaudeRun = (options: StartClaudeRunOptions): ClaudeRunHandle 
   }
 
   const session = active;
+  let contextPolling = false;
+  let contextPolledAt = 0;
+  /** How full the context window is, for the map's ring. Costs nothing and never delays the run. */
+  const pollContext = (): void => {
+    if (contextPolling || typeof session.getContextUsage !== 'function') {
+      return;
+    }
+    const now = Date.now();
+    if (now - contextPolledAt < 1500) {
+      return;
+    }
+    contextPolling = true;
+    contextPolledAt = now;
+    void session
+      .getContextUsage({ detail: 'summary' })
+      .then((usage) => {
+        if (typeof usage?.percentage === 'number') {
+          options.onEvent({ kind: 'context', percent: usage.percentage });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        contextPolling = false;
+      });
+  };
+
   void (async () => {
     try {
       for await (const message of session) {
@@ -666,6 +732,7 @@ export const startClaudeRun = (options: StartClaudeRunOptions): ClaudeRunHandle 
           }
           options.onEvent(event);
         }
+        pollContext();
         if (cancelled) {
           break;
         }

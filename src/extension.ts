@@ -48,6 +48,9 @@ import { RunsConsole, type PhaseActions } from './ui/runsConsole';
 import { OverviewPanel } from './ui/overviewPanel';
 import { buildOverview, emptyOverview } from './core/overview';
 import { resolveClaudeExecutable, type RunState } from './run/claudeRunner';
+import { MapTracker } from './map/tracker';
+import { MapPanel } from './ui/mapPanel';
+import { MapView, type MapSource } from './ui/mapView';
 
 interface PhaseTarget {
   record: SpecRecord;
@@ -132,6 +135,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const workspaceRoot = (): string | undefined =>
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  const mapTheme = (): 'dark' | 'light' => {
+    const kind = vscode.window.activeColorTheme.kind;
+    return kind === vscode.ColorThemeKind.Light ||
+      kind === vscode.ColorThemeKind.HighContrastLight
+      ? 'light'
+      : 'dark';
+  };
+  // The work map follows the same events as the runs console but keeps them
+  // beyond a single run, so the dedicated view has something to show.
+  const mapTracker = new MapTracker({ language: 'en' });
 
   const configuration = (): vscode.WorkspaceConfiguration =>
     vscode.workspace.getConfiguration('ccSdd');
@@ -662,6 +676,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getWorkspaceRoot: () => workspaceRoot(),
     getBinary: () =>
       resolveClaudeExecutable(configuration().get<string>('claudePath', 'claude')),
+    onRunStarted: (runId) => mapTracker.notePrompt(runId),
+    onRunEvent: (runId, event) => mapTracker.observe(runId, event),
+    onRunExit: (runId, ok) => mapTracker.noteExit(runId, ok),
+    onPermissionDecision: (runId, requestId, decision) =>
+      mapTracker.noteDecision(runId, requestId, decision),
     getRunsDir: () => {
       const root = workspaceRoot();
       return root ? path.join(resolveKiroDir(root, kiroDir()), 'runs') : undefined;
@@ -1080,11 +1099,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     taskProvider,
   );
   const sessionsTimeline = new SessionsTimeline(context.extensionUri, sessionsProvider);
+  const mapSource: MapSource = {
+    extensionUri: context.extensionUri,
+    tracker: mapTracker,
+    getTheme: mapTheme,
+    getLanguage: () => 'en',
+    getAccent: () => configuration().get<string>('mapAccent', 'mono'),
+  };
+  const mapView = new MapView(mapSource);
+  const mapPanel = new MapPanel(mapSource);
   context.subscriptions.push(
     specTimeline,
     sessionsTimeline,
+    mapView,
+    mapPanel,
     vscode.window.registerWebviewViewProvider('ccSdd.specs', specTimeline),
     vscode.window.registerWebviewViewProvider('ccSdd.sessions', sessionsTimeline),
+    vscode.window.registerWebviewViewProvider('ccSdd.map', mapView),
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      mapView.refresh();
+      mapPanel.refresh();
+    }),
     statusBar,
     runsStatusBar,
     register('ccSdd.refresh', refresh),
@@ -1234,7 +1269,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('ccSdd.refreshSessions', async () => {
       sessionsProvider.refresh();
     }),
+    register('ccSdd.openMap', async () => {
+      mapPanel.show();
+    }),
+    register('ccSdd.mapSidebar', async () => {
+      await vscode.workspace
+        .getConfiguration('ccSdd')
+        .update('mapInSidebar', true, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand('ccSdd.map.focus');
+    }),
+    register('ccSdd.pickMapAccent', async () => {
+      const current = configuration().get<string>('mapAccent', 'mono');
+      const picked = await vscode.window.showQuickPick(
+        [
+          {
+            label: 'Monochrome',
+            description: 'Grey accents; only the running station brightens (default)',
+            value: 'mono',
+          },
+          {
+            label: 'Teal',
+            description: 'The Memory station’s family',
+            value: 'teal',
+          },
+          {
+            label: 'Amber',
+            description: 'lot-map’s original warm accent',
+            value: 'amber',
+          },
+        ],
+        { placeHolder: `Work map accent (current: ${current})` },
+      );
+      if (!picked) {
+        return;
+      }
+      await vscode.workspace
+        .getConfiguration('ccSdd')
+        .update('mapAccent', picked.value, vscode.ConfigurationTarget.Global);
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('ccSdd.mapAccent')) {
+        mapView.refresh();
+        mapPanel.refresh();
+      }
       if (event.affectsConfiguration('ccSdd')) {
         setupWatcher();
         void refresh().catch(showError);

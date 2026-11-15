@@ -6,6 +6,7 @@ import {
   resolveClaudeExecutable,
   type RunState,
 } from '../../src/run/claudeRunner';
+import { recentTools } from '../../src/run/activity';
 
 const newRun = (): RunState => ({
   id: 'run-1',
@@ -59,7 +60,42 @@ describe('eventsFromClaudeLine', () => {
       { kind: 'assistant', text: 'Reading the spec.' },
       {
         kind: 'assistant',
-        tool: { name: 'Read', summary: '/repo/.kiro/specs/demo/requirements.md' },
+        tool: {
+          name: 'Read',
+          summary: '/repo/.kiro/specs/demo/requirements.md',
+          input: { file_path: '/repo/.kiro/specs/demo/requirements.md' },
+        },
+      },
+    ]);
+  });
+
+  it('carries a tool call id and its subagent for the work map', () => {
+    const events = eventsFromClaudeLine(
+      JSON.stringify({
+        type: 'assistant',
+        parent_tool_use_id: 'tool-parent',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tool-child',
+              name: 'Grep',
+              input: { pattern: 'TODO' },
+            },
+          ],
+        },
+      }),
+    );
+    expect(events).toEqual([
+      {
+        kind: 'assistant',
+        tool: {
+          name: 'Grep',
+          summary: 'TODO',
+          input: { pattern: 'TODO' },
+          id: 'tool-child',
+          agentId: 'tool-parent',
+        },
       },
     ]);
   });
@@ -331,5 +367,49 @@ describe('resolveClaudeExecutable', () => {
 
   it('returns the configured value when the command is unknown', () => {
     expect(resolveClaudeExecutable('cc-sdd-missing-binary-xyz')).toBe('cc-sdd-missing-binary-xyz');
+  });
+});
+
+describe('recentTools', () => {
+  it('returns the newest tools of the turn, oldest first', () => {
+    expect(
+      recentTools([
+        { kind: 'user', text: 'run it' },
+        { kind: 'tool', text: 'Read: tests/test_model.py' },
+        { kind: 'toolresult', text: 'ok' },
+        { kind: 'tool', text: 'Bash: Run baseline test suite' },
+      ]),
+    ).toEqual(['Read: tests/test_model.py', 'Bash: Run baseline test suite']);
+  });
+
+  it('keeps finished tools visible and caps the list', () => {
+    const segments = [
+      { kind: 'tool', text: 'Read: a.ts' },
+      { kind: 'toolresult', text: 'ok' },
+      { kind: 'tool', text: 'Bash: npm test' },
+      { kind: 'toolresult', text: 'ok' },
+      { kind: 'tool', text: 'Edit: b.ts' },
+      { kind: 'toolresult', text: 'ok' },
+      { kind: 'tool', text: 'Read: c.ts' },
+    ] as const;
+    expect(recentTools(segments, 3)).toEqual([
+      'Bash: npm test',
+      'Edit: b.ts',
+      'Read: c.ts',
+    ]);
+  });
+
+  it('does not carry tools across a new user message', () => {
+    expect(
+      recentTools([
+        { kind: 'user', text: 'first' },
+        { kind: 'tool', text: 'Read: a.ts' },
+        { kind: 'user', text: 'second' },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('has nothing to show before the first tool', () => {
+    expect(recentTools([{ kind: 'user', text: 'run it' }])).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@ import {
   type ClaudeRunHandle,
   type PhaseActions,
   type PhaseActionTarget,
+  type RunEvent,
   type RunSegment,
   type RunState,
   type TokenUsage,
@@ -29,6 +30,15 @@ export interface RunsConsoleOptions {
   resumeTerminal: (sessionId: string) => Promise<void>;
   getRunsDir: () => string | undefined;
   openOverview?: () => void;
+  /** The work map listens to the same events the console does. */
+  onRunStarted?: (runId: string) => void;
+  onRunEvent?: (runId: string, event: RunEvent) => void;
+  onRunExit?: (runId: string, ok: boolean) => void;
+  onPermissionDecision?: (
+    runId: string,
+    requestId: string,
+    decision: 'allow' | 'always' | 'deny',
+  ) => void;
 }
 
 interface ConsoleMessage {
@@ -114,6 +124,7 @@ export class RunsConsole {
     }
     this.runs.push(run);
     this.trimRuns();
+    this.options.onRunStarted?.(run.id);
 
     this.attachRunner(run, {
       prompt: input.prompt,
@@ -144,6 +155,7 @@ export class RunsConsole {
       permissionMode: input.permissionMode,
       resume: input.resume,
       onEvent: (event) => {
+        this.options.onRunEvent?.(run.id, event);
         applyRunEvent(run, event);
         this.updateAll();
         if (event.kind === 'result') {
@@ -161,6 +173,10 @@ export class RunsConsole {
         }
         run.endedAt = Date.now();
         this.handles.delete(run.id);
+        this.options.onRunExit?.(
+          run.id,
+          run.status === 'done' || run.status === 'cancelled',
+        );
         this.updateAll();
       },
     });
@@ -196,6 +212,7 @@ export class RunsConsole {
         text: instruction.trim() || 'Continue from where you left off.',
       },
     ];
+    this.options.onRunStarted?.(run.id);
     this.attachRunner(run, {
       prompt: instruction.trim() || 'Continue from where you left off.',
       permissionMode,
@@ -274,6 +291,7 @@ export class RunsConsole {
     run.endedAt = undefined;
     run.startedAt = Date.now();
     run.segments.push({ kind: 'user', text: prompt });
+    this.options.onRunStarted?.(run.id);
     this.attachRunner(run, { prompt, permissionMode, resume: run.sessionId });
     this.updateAll();
   }
@@ -524,6 +542,11 @@ export class RunsConsole {
           this.handles
             .get(run.id)
             ?.respondPermission(typed.pendingId, decision);
+          this.options.onPermissionDecision?.(
+            run.id,
+            typed.pendingId,
+            decision,
+          );
           run.pending = undefined;
           this.updateAll();
         }

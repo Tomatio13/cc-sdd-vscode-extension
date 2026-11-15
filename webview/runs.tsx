@@ -31,6 +31,7 @@ import type {
   RunSegment,
   PendingInteraction,
 } from '../src/run/claudeRunner';
+import { recentTools } from '../src/run/activity';
 import './runs.css';
 import { messagesFor } from './messages';
 
@@ -285,6 +286,7 @@ function Run({ run, history }: { run: RunState; history: RunSegment[] }) {
       : run.permissionMode,
   );
   const running = run.status === 'running';
+  const tools = running ? recentTools(run.segments) : [];
   const canSend = !running && (!!run.sessionId || !!run.preview);
   const runtime = useExternalStoreRuntime({
     messages: messagesFor(run, history),
@@ -345,6 +347,22 @@ function Run({ run, history }: { run: RunState; history: RunSegment[] }) {
                   ? 'Waiting for your response…'
                   : 'Claude is working…'}
               </p>
+            )}
+            {running && tools.length > 0 && (
+              <ul className="activity" aria-label="Recent tool calls">
+                {tools.map((text, index) => (
+                  <li
+                    key={`${index}:${text}`}
+                    className={index === tools.length - 1 ? 'current' : undefined}
+                    title={text}
+                  >
+                    <span className="activity-mark" aria-hidden="true">
+                      {index === tools.length - 1 ? '●' : '·'}
+                    </span>
+                    <span className="activity-text">{text}</span>
+                  </li>
+                ))}
+              </ul>
             )}
             {run.pending && (
               <Pending key={run.pending.id} run={run} pending={run.pending} />

@@ -290,16 +290,6 @@ time {
   min-height: 36px;
   padding-bottom: 0;
 }
-.activity {
-  margin: 0 0 4px;
-  color: var(--muted);
-  font-size: 11px;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
-}
 .spec-options {
   margin: 4px 0 0 24px;
 }

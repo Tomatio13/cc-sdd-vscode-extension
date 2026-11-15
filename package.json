@@ -27,6 +27,8 @@
   "activationEvents": [
     "workspaceContains:**/.kiro/specs/*/spec.json",
     "onView:ccSdd.specs",
+    "onView:ccSdd.sessions",
+    "onView:ccSdd.map",
     "onCommand:ccSdd.refresh"
   ],
   "contributes": {
@@ -50,6 +52,12 @@
           "id": "ccSdd.sessions",
           "name": "Sessions",
           "type": "webview"
+        },
+        {
+          "id": "ccSdd.map",
+          "name": "Map",
+          "type": "webview",
+          "when": "config.ccSdd.mapInSidebar"
         }
       ]
     },
@@ -220,10 +228,35 @@
         "command": "ccSdd.refreshSessions",
         "title": "cc-sdd: Refresh Sessions",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "ccSdd.openMap",
+        "title": "cc-sdd: Open Work Map",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "ccSdd.mapSidebar",
+        "title": "cc-sdd: Show Work Map in Sidebar",
+        "icon": "$(split-horizontal)"
+      },
+      {
+        "command": "ccSdd.pickMapAccent",
+        "title": "cc-sdd: Choose Work Map Accent",
+        "icon": "$(symbol-color)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "ccSdd.openMap",
+          "when": "view == ccSdd.specs || view == ccSdd.sessions",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ccSdd.pickMapAccent",
+          "when": "view == ccSdd.map",
+          "group": "navigation@0"
+        },
         {
           "command": "ccSdd.overview",
           "when": "view == ccSdd.specs || view == ccSdd.sessions",
@@ -496,19 +529,41 @@
           "type": "boolean",
           "default": true,
           "description": "Refresh the Specs and Tasks views when files under the specs directory change."
+        },
+        "ccSdd.mapInSidebar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the work map as a view in the cc-sdd sidebar as well as the editor panel. The panel is opened on demand with 'cc-sdd: Open Work Map'."
+        },
+        "ccSdd.mapAccent": {
+          "type": "string",
+          "enum": [
+            "mono",
+            "teal",
+            "amber"
+          ],
+          "enumDescriptions": [
+            "Grey accents; only the running station brightens.",
+            "Teal, the Memory station's family.",
+            "lot-map's original warm amber."
+          ],
+          "default": "mono",
+          "description": "Accent colour of the work map. The rest of the palette follows the editor theme."
         }
       }
     }
   },
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --log-level=warning \"--define:import.meta.url=__filename\" && npm run build:webview",
+    "build": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --log-level=warning \"--define:import.meta.url=__filename\" && npm run build:webview && npm run build:map",
     "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=out/extension.js --watch \"--define:import.meta.url=__filename\"",
     "check": "tsc --noEmit -p . && tsc --noEmit -p webview/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest -w",
     "package": "npm run build && npx @vscode/vsce package --no-dependencies --readme-path README.marketplace.md",
     "build:webview": "esbuild webview/runs.tsx --bundle --platform=browser --format=iife --target=chrome120 --jsx=automatic --outfile=out/runs.js --minify",
-    "watch:webview": "esbuild webview/runs.tsx --bundle --platform=browser --format=iife --target=chrome120 --jsx=automatic --outfile=out/runs.js --minify --watch"
+    "build:map": "esbuild webview/map.ts --bundle --platform=browser --format=iife --target=chrome120 --outfile=out/map.js --minify",
+    "watch:webview": "esbuild webview/runs.tsx --bundle --platform=browser --format=iife --target=chrome120 --jsx=automatic --outfile=out/runs.js --minify --watch",
+    "watch:map": "esbuild webview/map.ts --bundle --platform=browser --format=iife --target=chrome120 --outfile=out/map.js --minify --watch"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.319",
