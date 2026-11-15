@@ -1,24 +1,25 @@
 # cc-sdd Specs（VS Code 拡張機能）
 
-[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード、headless な **Runs** コンソール、Claude Code セッションの再開、Spec の進捗を俯瞰する **Overview** ポートフォリオ）を追加します。
+[cc-sdd](https://github.com/gotalab/cc-sdd) の specs を VS Code 上で扱うワークベンチです。`.kiro/specs/` を直接読み取り、足りなかった UI レイヤー（spec explorer、承認ゲート、フェーズランチャー、タスクボード、質問にその場で答えられる headless **Runs** コンソール、Claude Code セッションの再開、Spec の進捗を俯瞰する **Overview** ポートフォリオ、実行中のツールを可視化する **Work map**）を追加します。
 
 <div align="center" style="margin-bottom: 1rem; font-size: 1.1rem;"><sub>
 <a href="./README.md">English</a> | 日本語
 </sub></div>
 
-![cc-sdd Specs ワークベンチ: Specs と Sessions のサイドバー、中央の Run 別タブ、右の進捗報告向け Overview](./assets/workbench.png)
+![cc-sdd Specs ワークベンチ: Specs と Sessions のサイドバー、質問カード付きの Run タブ、右の Overview と Work map](./assets/workbench.png)
 
-このワークベンチは、実装タスクを統合した Specs ビューと Sessions 履歴タイムライン、2つのパネルで構成されます。
+このワークベンチは、実装タスクを統合した Specs ビューと Sessions 履歴タイムライン、3つのパネルで構成されます。
 
 - **Specs / Sessions** — 作業対象の Spec を選び、Requirements → Design → Tasks → Implementation → Verification の工程、実行状態、タスク、セッション再開を対応するビューで扱います。
-- **Runs** — assistant-ui の会話画面で Markdown の応答と進捗を表示。権限確認と `AskUserQuestion` の単一選択・複数選択・自由入力にその場で回答できます。ツール実行ログは表示しません。
+- **Runs** — assistant-ui の会話画面で Markdown の応答と進捗を表示。権限確認と `AskUserQuestion` の単一選択・複数選択・自由入力にその場で回答できます。ツールの全文ログは表示せず、直近のツール呼び出しだけを実行状態の下に表示します。
 - **Overview** — 上位への進捗報告に使うリポジトリ全体のスナップショット。全体件数、要注意の状態、進行中 Spec の工程・実装進捗・検証状態、検証済みの完了を表示し、報告文をコピーできます。承認・実行は各作業者の Specs 側で行います。
+- **Work map** — headless Run を専用のエディタタブで可視化。ツール呼び出し、モデルのステップ、サブエージェント、権限確認が起きた場所をステーションとして光らせ、コンテキスト残量のリングと直近16件の行動を表示します。既定はモノクロ・英語ラベルで、サイドバー表示は任意です。
 
 設計・内部構造のドキュメント: **[docs/](./docs/README.md)**
 
 Specs は、工程を点と線でつなぐサイドバーのタイムラインです。実装タスクの進捗、承認・実行操作、このウィンドウの最近の Run（最大5件）を表示します。実装タスクは各 Spec の Implementation 配下に統合し、完了分は折りたたみます。独立した Tasks ビューは廃止し、Sessions も同じモノクロのタイムライン表示です。実行中を上部、過去の履歴を最終活動の新しい順に並べ、詳細と再開操作は展開時に表示します。更新時は展開状態と閲覧位置を保持します。
 
-Runs は 1 Run = 1 タブです。タブ名は Spec 名と工程名を表示し、同じ Run やセッションの再表示では既存タブを再利用します。タブを閉じても実行は続き、停止には四角の停止アイコンを使います。`cc-sdd: Show Runs Console` は入力待ちを先頭にした Run 選択メニューを開きます（1件なら直接表示）。Sessions の履歴も専用タブで開きます。角丸の入力欄から追加指示を送り、左下のメニューで権限モードを選べます。送信・再開・停止・フェーズ操作はツールチップ付きアイコンで表示し、モデル選択は設けていません。
+Runs は 1 Run = 1 タブです。タブ名は Spec 名と工程名を表示し、同じ Run やセッションの再表示では既存タブを再利用します。タブを閉じても実行は続き、停止には四角の停止アイコンを使います。`cc-sdd: Show Runs Console` は入力待ちを先頭にした Run 選択メニューを開きます（1件なら直接表示）。Sessions の履歴も専用タブで開きます。`AskUserQuestion` は推奨候補・複数選択・自由入力のカードとして会話内に表示されます。角丸の入力欄から追加指示を送り、左下のメニューで権限モードを選べます。送信・再開・停止・フェーズ操作はツールチップ付きアイコンで表示し、モデル選択は設けていません。
 
 ## フローの対応範囲
 
@@ -47,6 +48,7 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 - **Approval gates** — 承認前に成果物を検証。必須セクションの欠落や未解決の `{{PLACEHOLDER}}` は承認をブロックし、より軽い問題は明示的な確認が必要
 - **Phase launcher** — `/kiro-spec-requirements`、`/kiro-spec-design`、`/kiro-spec-tasks`、`/kiro-impl`、`/kiro-validate-*` を Claude Code / Codex / Copilot Chat / OpenCode / カスタムコマンド / クリップボードで実行
 - **Overview ポートフォリオ** — 上位への進捗報告に使うリポジトリ全体のスナップショット。全体件数、要注意の状態、進行中 Spec の工程・実装進捗・検証状態、検証済みの完了を表示し、報告文をコピーできます。承認・実行は各作業者の Specs 側で行います。
+- **Work map** — headless Run を専用のエディタタブで可視化。ツール呼び出し・モデルのステップ・サブエージェント・権限確認がステーションを光らせ、コンテキスト残量がリングで埋まり、直近16件の行動が地図の下に残ります。既定はモノクロで、アクセントはモノクロ / ティール / アンバーから選べます。
 - **Task board** — 選択中 Spec 名を常時表示。実装タスクと Verification セクション（検証結果・チェック項目・開始/再検証/レポートを開く）を分離。完了タスクは折りたたみ、次の候補・実行中・依存待ちを区別。タスク単体 / ここから残りを実行、tasks.md の該当行を開く、実行中の Run を開く操作に対応
 - **Sessions** — 初期表示は選択中 Spec。全 Spec に切り替え可能。active / waiting と history を分け、Spec・工程（検証を含む）・状態・最終活動を表示。履歴は resume、実行中は関連 Run を開く
 - **Run insights** — 入力欄の上にモデル名、入力・出力トークン、キャッシュ読み取り、コストを表示。`cc-sdd: Save Last Run Trace` で最新 Run のトレースを `.kiro/runs/*.json` に保存できます
@@ -93,6 +95,9 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `cc-sdd: Select Active Spec` | Tasks ビューが追従する spec を選択 |
 | `cc-sdd: Show Spec Status` | フェーズと承認の Markdown サマリを開く |
 | `cc-sdd: Open Overview` | リーダー / PM 向けの Spec ポートフォリオを開く（Specs / Tasks / Sessions のタイトルバーのダッシュボードアイコンからも起動） |
+| `cc-sdd: Open Work Map` | ワークマップをエディタタブで開く（Specs / Sessions のタイトルバーのグラフアイコンからも起動） |
+| `cc-sdd: Show Work Map in Sidebar` | `ccSdd.mapInSidebar` を有効にして cc-sdd サイドバーの Map ビューを開く |
+| `cc-sdd: Choose Work Map Accent` | 地図のアクセント色（モノクロ / ティール / アンバー）を切り替える |
 | Approve / Revoke Phase | フェーズノードのコンテキストアクション |
 | Run Phase | 未生成 / draft / review のフェーズのコンテキストアクション |
 | Run Implementation | 実装可能な spec のコンテキストアクション（🚀） |
@@ -112,6 +117,8 @@ Discovery → Steering → spec 生成 → 承認 → 実装 → 検証、まで
 | `ccSdd.claudePath` | `claude` | headless 実行で使う claude CLI のパス |
 | `ccSdd.installLanguage` | 空 | インストーラに渡す `--lang` 値（例: `ja`） |
 | `ccSdd.autoRefresh` | `true` | specs ディレクトリの変更を監視 |
+| `ccSdd.mapInSidebar` | `false` | ワークマップをサイドバーのビューにも常設する（パネルは必要なときだけ開く） |
+| `ccSdd.mapAccent` | `mono` | ワークマップのアクセント色: `mono` / `teal` / `amber` |
 
 ### エージェント呼び出し
 
@@ -134,6 +141,18 @@ Copilot Chat を開けない場合は、プロンプトをクリップボード�
 - **Resume in Runs console** — 同じセッションを headless で継続(Claude Agent SDK の `resume`)。権限モードは通常どおり選択。保存済みの会話を新しい応答の前に表示します(ツール実行ログは省略)
 - **Resume in terminal** — `claude --resume <session-id>` を対話ターミナルで起動
 - **Open raw transcript** / **Copy session id** — 調査・スクリプト用
+
+### ワークマップ
+
+**cc-sdd: Open Work Map**（Specs / Sessions のタイトルバーのグラフアイコンからも起動）は、Overview と同じくエディタタブでワークマップを開きます。ツール呼び出し、モデルのステップ、権限カード、サブエージェントのたびに中央から各ステーションへパルスが飛びます。ステーションは You / Model / Memory / Files / Shell / Network / Browser / Agents / Skills / Hooks の10種で、コマンドログを読む代わりに「どこに時間を使ったか」が一目で分かります。使われたスポークは太く明るくなり、中央のリングがコンテキスト残量を示し、地図の下には直近16件の行動と所要時間が並びます。モデルの切り替えと回答の完了も地図上に印が付きます。
+
+- パネルは必要なときだけ開きます。`ccSdd.mapInSidebar` を有効にすると cc-sdd サイドバーにも Map ビューを常設できます（`cc-sdd: Show Work Map in Sidebar` で有効化＋フォーカス）。
+- `ccSdd.mapAccent` でアクセント色を選べます。`mono` はグレースケールで、実行中のステーションだけが明るくなる既定値。`teal` / `amber` は固定パレットです。コマンドパレットの `cc-sdd: Choose Work Map Accent` から切り替えられます。
+- **ズーム**（`−` / `+`）は 160〜400 px またはパネル幅いっぱいで描画し、**Hide map** で「now」の1行に折りたためます。選択は記憶されます。
+- パネルは Runs コンソールと同じイベントを購読します。対象はこの拡張から起動した Run（Agent SDK `query`）のみです。ターミナルや別ウィンドウの Claude Code セッションは接続されていないため、地図は空のままです。
+- ラベルは名前だけを持ちます。ファイルはパスの末尾2要素、Web はホスト名、シェルはモデルが書いた短い説明。ファイル内容・検索パターン・クエリ本文は保持しません。
+
+描画・分類・パレットは [lot-map](https://github.com/alexeyw/lot-map)（MIT）から移植しています。詳細は [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) を参照してください。
 
 ### Overview ポートフォリオ
 

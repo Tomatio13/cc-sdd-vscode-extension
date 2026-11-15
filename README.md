@@ -4,21 +4,22 @@
 English | <a href="./README_ja.md">日本語</a>
 </sub></div>
 
-A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console, resumable Claude Code sessions, and a leader/PM **Overview** portfolio for spec progress.
+A VS Code workbench for [cc-sdd](https://github.com/gotalab/cc-sdd) specs. It reads `.kiro/specs/` directly and adds the missing UI layer: a spec explorer, approval gates, phase launchers, a task board, a headless **Runs** console with inline questions, resumable Claude Code sessions, a leader/PM **Overview** portfolio, and a live **Work map** of runs.
 
-![cc-sdd Specs workbench: Specs and Sessions in the sidebar, individual Run tabs in the middle, and the progress-reporting Overview on the right](./assets/workbench.png)
+![cc-sdd Specs workbench: Specs and Sessions in the sidebar, a Run with inline question cards in the middle, and the Overview and Work map on the right](./assets/workbench.png)
 
-The workbench is built around a Specs sidebar with embedded implementation tasks and a Sessions history timeline and two panels:
+The workbench is built around a Specs sidebar with embedded implementation tasks and a Sessions history timeline, plus three panels:
 
 - **Specs, Tasks, Sessions** — the sidebar selects one spec, shows its Requirements → Design → Tasks → Implementation → Verification pipeline, and keeps task execution and session resume in the matching views.
-- **Runs** — shows Markdown responses and progress in an assistant-ui conversation. Answer permission requests and single-choice, multiple-choice, or free-text questions inline; tool logs are hidden.
+- **Runs** — shows Markdown responses and progress in an assistant-ui conversation. Answer permission requests and single-choice, multiple-choice, or free-text questions inline; full tool logs stay hidden, while the last few tool calls appear under the live status line.
 - **Overview** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
+- **Work map** — a live map of headless runs in its own editor tab: tool calls, model steps, subagents and permissions light their stations as they happen, with a context-window ring and the last 16 actions. Monochrome by default, English labels, and an opt-in sidebar mirror.
 
 Architecture and internals (Japanese): **[docs/](./docs/README.md)**
 
 Specs uses a theme-aware sidebar timeline with connected stage markers, implementation task progress, approval/run actions, and the five most recent runs in this window. Implementation tasks are embedded under each spec’s Implementation stage, with completed tasks folded away. The standalone Tasks view has been removed; Sessions uses the same monochrome timeline style: active sessions first, then history ordered by last activity, with details and resume actions on expansion. Expansion and reading position are preserved on refresh.
 
-Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use the square stop icon to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab. The rounded composer supports follow-up messages and an upward-opening permission menu. Send, resume, stop, and phase actions use icons with tooltips; there is no model selector.
+Runs uses one editor tab per run, titled with its spec and stage. Reopening a run or session reuses its tab. Closing a tab keeps the run available and does not cancel execution; use the square stop icon to stop it. `cc-sdd: Show Runs Console` opens a run picker with waiting runs first (or the only run directly). Session history also opens in its own tab. `AskUserQuestion` renders as inline cards with recommended options, multi-select choices and a free-text field. The rounded composer supports follow-up messages and an upward-opening permission menu. Send, resume, stop, and phase actions use icons with tooltips; there is no model selector.
 
 ## What it does
 
@@ -27,6 +28,7 @@ Runs uses one editor tab per run, titled with its spec and stage. Reopening a ru
 - **Approval gates** — validates the artifact before recording an approval. Missing sections and unresolved `{{PLACEHOLDER}}` tokens block approval; softer issues require explicit confirmation.
 - **Phase launcher** — runs `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`, and `/kiro-impl` in Claude Code, the Claude Code for VS Code panel, the headless Runs console, Codex, Copilot Chat, OpenCode, a custom command, or the clipboard.
 - **Overview portfolio** — A repository progress snapshot for reporting: total / in-progress / review / verification / attention / verified counts, recorded concerns, spec stages and implementation progress, and collapsed verified completions. Copy progress summary exports the current snapshot. Approvals and execution remain in Specs.
+- **Work map** — a live map of headless runs in its own editor tab. Tool calls, model steps, subagents and permissions light their station, the context window fills as a ring, and the last 16 actions stay under the map. Monochrome by default, with monochrome, teal or amber accents.
 - **Task board** — each spec’s Implementation stage contains its own tasks. Verification remains a separate stage, with start/revalidate/open-report actions. Completed tasks fold away; next, running, and waiting tasks are distinct. Run a single task, run the remaining tasks from a point, open the task in `tasks.md`, or open its active run.
 - **Sessions** — initially scoped to the selected spec, with a toggle for all specs. Active/waiting sessions are separated from history; each item shows spec, stage (including verification), state, and last activity. Resume is offered for history sessions and open-run for active sessions with a matching run.
 - **Run insights** — model name, input/output tokens, cache-read tokens, and cost above the composer. Export the latest run trace to `.kiro/runs/*.json` with `cc-sdd: Save Last Run Trace` for debugging.
@@ -73,6 +75,9 @@ The extension treats `spec.json` as the single source of truth and only writes a
 | `cc-sdd: Select Active Spec` | Choose the active spec and filter Sessions. |
 | `cc-sdd: Show Spec Status` | Open a Markdown summary of phases and approvals. |
 | `cc-sdd: Open Overview` | Open the leader / PM spec portfolio (also the dashboard icon in the Specs and Sessions title bars). |
+| `cc-sdd: Open Work Map` | Open the work map in an editor tab (also the graph icon in the Specs and Sessions title bars). |
+| `cc-sdd: Show Work Map in Sidebar` | Enable `ccSdd.mapInSidebar` and focus the map view in the cc-sdd sidebar. |
+| `cc-sdd: Choose Work Map Accent` | Switch the map accent between monochrome, teal and amber. |
 | Approve / Revoke Phase | Buttons beside each timeline stage. |
 | Run Phase | Context action on a missing/draft/generated phase. |
 | Run Implementation | Context action on a ready spec. |
@@ -91,6 +96,8 @@ Internal commands (`ccSdd.openArtifact`, `ccSdd.openTask`, and so on) are hidden
 | `ccSdd.claudePath` | `claude` | Path to the claude CLI used for headless runs. |
 | `ccSdd.installLanguage` | empty | Optional `--lang` value for the installer. |
 | `ccSdd.autoRefresh` | `true` | Watch the specs directory for changes. |
+| `ccSdd.mapInSidebar` | `false` | Also show the work map as a sidebar view (the panel is opened on demand). |
+| `ccSdd.mapAccent` | `mono` | Work map accent: `mono`, `teal` or `amber`. |
 
 ### Agent invocation
 
@@ -114,6 +121,18 @@ The **Sessions** view reads `~/.claude/projects/<encoded-workspace>/*.jsonl`, so
 - **Resume in Runs console** — continues the same session headlessly (Claude Agent SDK `resume`), with the usual permission picker. The stored conversation is displayed before the new responses; tool logs are omitted.
 - **Resume in terminal** — runs `claude --resume <session-id>` interactively.
 - **Open raw transcript** / **Copy session id** — for inspection or scripting.
+
+### Work map
+
+**cc-sdd: Open Work Map** — also the graph icon in the Specs and Sessions title bars — opens the work map in an editor tab, like Overview. Every tool call, model step, permission card and subagent sends a pulse from the centre to its station — You, Model, Memory, Files, Shell, Network, Browser, Agents, Skills or Hooks — so you can see where a run is spending its time instead of reading a command log. Spokes wear in with use, the context window fills as a ring around the centre, and the rows below the map list the last 16 actions with their durations. A model switch and the final answer are marked on the map.
+
+- The panel is opened on demand. Set `ccSdd.mapInSidebar` to also keep the map as a view in the cc-sdd sidebar; `cc-sdd: Show Work Map in Sidebar` turns that on and focuses it.
+- `ccSdd.mapAccent` picks the accent: `mono` keeps the map grey, with only the running station brightening (default); `teal` and `amber` are fixed palettes. `cc-sdd: Choose Work Map Accent` switches it from the command palette.
+- **Zoom** (`−` / `+`) draws the map at 160–400 px or as wide as the panel; **Hide map** folds it to its line of now. The choice is remembered.
+- The panel follows the events of the Runs console. It shows runs started from this extension (Agent SDK `query`); sessions running in another terminal or another Claude Code window are not connected to it, so the map stays empty for them.
+- Labels carry names only: a file's last two path parts, a host, a tool name, a short description written by the model. No file contents, patterns or query text are kept.
+
+The drawing, classification and palette are ported from [lot-map](https://github.com/alexeyw/lot-map) (MIT); see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 ### Overview portfolio
 
